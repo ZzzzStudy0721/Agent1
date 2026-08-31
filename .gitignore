@@ -1,0 +1,14 @@
+# API keys — never commit
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Local vector store data
+chroma_db/
+
+# Streamlit
+.streamlit/secrets.toml
