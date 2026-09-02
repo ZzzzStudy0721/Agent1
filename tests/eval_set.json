@@ -1,5 +1,8 @@
 [
   {"question": "毕设中对比了哪些目标检测模型，最终为什么选 YOLOv8n？", "keywords": ["Faster R-CNN", "YOLOv5s", "35 FPS"]},
+  {"question": "简历中提到了模型对比，具体有哪些？", "keywords": ["Faster R-CNN", "YOLOv5s", "YOLOv8n"]},
+  {"question": "毕设里对比了哪些模型？", "keywords": ["Faster R-CNN", "YOLOv5s", "YOLOv8n"]},
+  {"question": "我毕设里对比了哪些模型", "keywords": ["Faster R-CNN", "YOLOv5s", "YOLOv8n"]},
   {"question": "优化后的 DeepSORT 相比 SORT，ID 切换次数降低了多少？", "keywords": ["46.7%"]},
   {"question": "车辆自动计数误差和车速估算误差控制在什么水平？", "keywords": ["3.5%", "4.1"]},
   {"question": "车辆计数采用什么算法，有哪些防误计机制？", "keywords": ["虚拟检测线", "四重过滤"]},

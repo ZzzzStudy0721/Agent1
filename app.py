@@ -34,9 +34,11 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_DIR = os.path.join(BASE_DIR, "chroma_db")
 TOP_K = 4
 COLLECTION = "kb_full"
-# Guardrail: refuse when the best rerank score is below this.
-# Probed 2026-09-02: relevant 0.876~0.999, irrelevant 0.000~0.028.
-RERANK_THRESHOLD = 0.5
+# Guardrail: refuse when the best vector similarity is below this.
+# Probed 2026-09-02 (8 samples): relevant 0.283~0.656, irrelevant 0.011~0.127.
+# Rerank score was NOT used: English-pretrained bge-reranker-base fails on
+# colloquial Chinese questions (relevant as low as 0.019 vs irrelevant 0.028).
+VECTOR_THRESHOLD = 0.2
 REFUSAL = "知识库中没有相关信息，无法回答。"
 
 
@@ -84,13 +86,18 @@ def generate(query: str, context_docs: list, llm) -> str:
 
 
 def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
-    """Hybrid retrieval + rerank with refusal guardrail (M2 pipeline)."""
+    """Hybrid retrieval + rerank with refusal guardrail (M2 pipeline).
+
+    Refusal gate uses the Chinese embedding's similarity score, which stays
+    robust on colloquial questions (unlike the English-pretrained reranker).
+    """
+    top_vec = vectorstore.similarity_search_with_relevance_scores(query, k=1)
+    if not top_vec or top_vec[0][1] < VECTOR_THRESHOLD:
+        return REFUSAL
     v = vectorstore.similarity_search(query, k=retrieval.CANDIDATE_K)
     b = bm25.search(query, top_k=retrieval.CANDIDATE_K)
     fused = retrieval.rrf_fusion(v, b, top_k=retrieval.CANDIDATE_K)
     ranked = reranker.rerank_with_scores(query, fused)
-    if not ranked or ranked[0][1] < RERANK_THRESHOLD:
-        return REFUSAL
     docs = [c for c, _ in ranked[:top_k]]
     return generate(query, docs, llm)
 
