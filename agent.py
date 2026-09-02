@@ -32,13 +32,55 @@ GREETING = (
     "请尽量用具体数据和技术细节回答。让我们开始。"
 )
 
+MAX_FOLLOWUP = 2  # follow-up rounds per question (WBS 4.4 degraded version)
+
 
 class InterviewState(TypedDict):
     messages: Annotated[list, operator.add]  # user answers accumulate across rounds
     question_index: int
+    followup_count: int  # how many follow-ups already asked for current question
+    followup_verdict: str  # "followup" | "review", set by followup_check for routing
     # str + operator.add concatenates, so review text and question text both
     # survive the round instead of the later node overwriting the earlier one
     output: Annotated[str, operator.add]
+
+
+def followup_check(state: InterviewState) -> dict:
+    """Decide: ask a follow-up (short/vague/evasive answer, max 2 rounds) or review."""
+    idx = state["question_index"]
+    if idx >= len(DEMO_QUESTIONS) or not state["messages"]:
+        return {"followup_verdict": "review"}
+    if state.get("followup_count", 0) >= MAX_FOLLOWUP:
+        return {"followup_verdict": "review"}
+    llm = ChatDeepSeek(model="deepseek-chat", temperature=0)
+    answer = state["messages"][-1]
+    prompt = (
+        "你正在面试候选人。判断以下回答是否需要追问。\n"
+        "需要追问的情况（满足其一即可）：\n"
+        "1. 回答过短（少于 30 字）\n"
+        "2. 缺少量化细节或具体数据\n"
+        "3. 回避了问题核心\n\n"
+        f"问题：{DEMO_QUESTIONS[idx]}\n回答：{answer}\n\n"
+        "只输出一个字：追 或 过"
+    )
+    verdict = llm.invoke(prompt).content.strip()
+    return {"followup_verdict": "followup" if verdict.startswith("追") else "review"}
+
+
+def followup_node(state: InterviewState) -> dict:
+    """Generate one deep-dive follow-up question on the weak spot of the answer."""
+    idx = state["question_index"]
+    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.1)
+    prompt = (
+        "候选人的回答不够具体。基于问题和回答，生成一个深入追问，"
+        "只问一个点，不要重复原问题：\n\n"
+        f"问题：{DEMO_QUESTIONS[idx]}\n回答：{state['messages'][-1]}\n\n追问："
+    )
+    followup = llm.invoke(prompt).content.strip()
+    return {
+        "output": f"\n追问：{followup}",
+        "followup_count": state.get("followup_count", 0) + 1,
+    }
 
 
 def review_node(state: InterviewState) -> dict:
@@ -57,7 +99,7 @@ def review_node(state: InterviewState) -> dict:
         "给出 3-5 句点评，并指出一个最值得改进的点。"
     )
     review = llm.invoke(prompt).content
-    return {"output": review, "question_index": idx + 1}
+    return {"output": review, "question_index": idx + 1, "followup_count": 0}
 
 
 def route_after_review(state: InterviewState) -> str:
@@ -88,10 +130,18 @@ def wrap_node(state: InterviewState) -> dict:
 
 def build_graph():
     graph = StateGraph(InterviewState)
+    graph.add_node("followup_check", followup_check)
+    graph.add_node("followup", followup_node)
     graph.add_node("review", review_node)
     graph.add_node("ask", ask_node)
     graph.add_node("wrap", wrap_node)
-    graph.add_edge(START, "review")
+    graph.add_edge(START, "followup_check")
+    graph.add_conditional_edges(
+        "followup_check",
+        lambda s: s["followup_verdict"],
+        {"followup": "followup", "review": "review"},
+    )
+    graph.add_edge("followup", END)
     graph.add_conditional_edges(
         "review", route_after_review, {"ask": "ask", "wrap": "wrap"}
     )
@@ -103,7 +153,13 @@ def build_graph():
 def run_interview():
     graph = build_graph()
     history = []
-    state = {"messages": history, "question_index": 0, "output": ""}
+    state = {
+        "messages": history,
+        "question_index": 0,
+        "followup_count": 0,
+        "followup_verdict": "",
+        "output": "",
+    }
     while True:
         result = graph.invoke(state)
         print(result["output"])
@@ -116,6 +172,8 @@ def run_interview():
         state = {
             "messages": history,
             "question_index": result["question_index"],
+            "followup_count": result.get("followup_count", 0),
+            "followup_verdict": "",
             "output": "",
         }
 
