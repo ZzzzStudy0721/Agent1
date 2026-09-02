@@ -13,5 +13,8 @@ chroma_db/
 # Knowledge base (personal resume/project docs — never push)
 data/
 
+# Generated interview reports (personal content)
+reports/
+
 # Streamlit
 .streamlit/secrets.toml

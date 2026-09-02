@@ -20,6 +20,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from langchain_chroma import Chroma
+from langchain_core.tools import tool
 from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import END, START, StateGraph
@@ -34,6 +35,23 @@ DEMO_QUESTIONS = [
 ]
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
+REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+
+
+@tool
+def export_report(filename: str, content: str) -> str:
+    """Export the interview wrap-up report to a markdown file under reports/.
+
+    Args:
+        filename: report file name, e.g. interview_report.md
+        content: full markdown content of the report
+    """
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    path = os.path.join(REPORTS_DIR, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return f"报告已保存到 {path}"
+
 
 _checker = None  # lazy-loaded retrieval pipeline for evidence verification
 
@@ -219,7 +237,19 @@ def wrap_node(state: InterviewState) -> dict:
         "1. 整体表现总结（2-3 句）\n2. 最突出的 1 个优点\n3. 最需改进的 1 个问题\n\n"
         f"面试记录：\n{transcript}"
     )
-    return {"output": "\n" + llm.invoke(prompt).content + "\n\n面试结束，感谢作答！"}
+    summary = llm.invoke(prompt).content
+    # Tool calling: let the LLM decide to export the report via the tool
+    llm_with_tools = llm.bind_tools([export_report])
+    tool_msg = llm_with_tools.invoke(
+        f"请调用 export_report 工具，把下面的复盘报告保存为 interview_report.md：\n\n{summary}"
+    )
+    export_note = ""
+    for call in tool_msg.tool_calls:
+        result = export_report.invoke(call["args"])
+        export_note = f"\n\n📄 {result}"
+    return {
+        "output": "\n" + summary + export_note + "\n\n面试结束，感谢作答！"
+    }
 
 
 def build_graph():
