@@ -1,12 +1,13 @@
 """Interviewer agent (M3): LangGraph state machine driving the interview flow.
 
-Graph: START -> review -> route -> (ask | wrap) -> END
+Graph: START -> followup_check -> (followup | review) -> route -> (ask | wrap) -> END
 Each CLI round invokes the graph once: the user's previous answer comes in via
 state["messages"], the review node scores it, then the graph asks the next
-question or wraps up. JD-based question generation lands in WBS 4.2.
+question or wraps up. Questions are generated from a JD file in data/ (WBS 4.2).
 """
 import operator
 import os
+import re
 import sys
 from typing import Annotated, TypedDict
 
@@ -26,6 +27,38 @@ DEMO_QUESTIONS = [
     "车辆计数采用了什么算法？有哪些防误计机制？",
     "你平时如何与 AI 协作完成开发？",
 ]
+
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+def load_jd(data_dir: str = DATA_DIR) -> str | None:
+    """Read the first file whose name contains 'JD' from the knowledge base."""
+    if not os.path.isdir(data_dir):
+        return None
+    for name in sorted(os.listdir(data_dir)):
+        if "JD" in name and name.endswith((".md", ".txt")):
+            with open(os.path.join(data_dir, name), encoding="utf-8") as f:
+                return f.read()
+    return None
+
+
+def generate_questions(jd_text: str, n: int = 10) -> list:
+    """Generate n interview questions from a JD (WBS 4.2)."""
+    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.3)
+    prompt = (
+        "你是资深面试官。根据岗位 JD 生成面试题。要求：\n"
+        "1. 围绕 JD 的技术关键词（如 RAG、LangGraph、AI Agent、Python）出题\n"
+        "2. 结合 JD 中的业务场景（如知识库问答、工单总结、自动化工作流）\n"
+        "3. 每题可独立回答，不是连环题\n"
+        f"生成 {n} 道题，每行一题，格式：1. 题目\n\nJD：\n{jd_text}"
+    )
+    text = llm.invoke(prompt).content
+    questions = [
+        re.sub(r"^\d+[.、]\s*", "", line)
+        for line in text.splitlines()
+        if re.match(r"^\d+[.、]", line.strip())
+    ]
+    return questions[:n]
 
 GREETING = (
     "你好，我是你的 AI 面试官。今天围绕你的简历和项目经历提问，"
@@ -151,6 +184,11 @@ def build_graph():
 
 
 def run_interview():
+    jd_text = load_jd()
+    if jd_text:
+        questions = generate_questions(jd_text)
+        print(f"[i] 基于 JD 生成了 {len(questions)} 道面试题")
+        DEMO_QUESTIONS[:] = questions
     graph = build_graph()
     history = []
     state = {
