@@ -1,10 +1,12 @@
 """Smoke test: verify DeepSeek API key works (WBS task 1.3)."""
 import json
+import os
 import urllib.request
 
 # Load key from .env without extra dependencies (MVP stage)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 key = None
-with open(".env", encoding="utf-8") as f:
+with open(os.path.join(BASE_DIR, ".env"), encoding="utf-8") as f:
     for line in f:
         if line.startswith("DEEPSEEK_API_KEY="):
             key = line.split("=", 1)[1].strip()

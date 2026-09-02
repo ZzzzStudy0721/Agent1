@@ -1,0 +1,22 @@
+[
+  {"question": "毕设中对比了哪些目标检测模型，最终为什么选 YOLOv8n？", "keywords": ["Faster R-CNN", "YOLOv5s", "35 FPS"]},
+  {"question": "优化后的 DeepSORT 相比 SORT，ID 切换次数降低了多少？", "keywords": ["46.7%"]},
+  {"question": "车辆自动计数误差和车速估算误差控制在什么水平？", "keywords": ["3.5%", "4.1"]},
+  {"question": "车辆计数采用什么算法，有哪些防误计机制？", "keywords": ["虚拟检测线", "四重过滤"]},
+  {"question": "毕设中轨迹生命周期管理是怎么设计的？", "keywords": ["3帧确认", "30帧淘汰"]},
+  {"question": "毕设数据集是如何构建和划分的？", "keywords": ["Labelimg", "8:2", "马赛克增强"]},
+  {"question": "桌面客户端界面用什么框架实现，如何避免界面卡顿？", "keywords": ["PyQt5", "QThread"]},
+  {"question": "Flask 用电监控系统用什么技术栈，后端如何暴露接口？", "keywords": ["Flask", "RESTful", "Chart.js"]},
+  {"question": "Flask 项目拆分为哪四个独立子模块？", "keywords": ["数据采集", "设备控制", "统计计算", "前端渲染"]},
+  {"question": "用电监控系统的时序数据模型包含哪些字段？", "keywords": ["功率因数", "24h×60"]},
+  {"question": "Flask 前端如何保证实时性？", "keywords": ["分级轮询", "30s"]},
+  {"question": "Vibe Coding 交付时用什么方式驱动 AI 生成代码？", "keywords": ["模块接口契约", "结构化需求描述"]},
+  {"question": "毕设系统在什么硬件平台上开发测试？", "keywords": ["联想拯救者", "RTX 3060"]},
+  {"question": "系统支持哪些视频格式？", "keywords": ["MP4", "FLV"]},
+  {"question": "系统划分为几个核心功能模块，设计原则是什么？", "keywords": ["七大核心模块", "高内聚"]},
+  {"question": "系统处理 1080P 视频的平均推理帧率和单帧延迟是多少？", "keywords": ["32.6FPS", "30.5ms"]},
+  {"question": "系统稳定性测试连续运行了多久？", "keywords": ["10 小时", "8 小时"]},
+  {"question": "最终系统检测精确率、召回率、mAP 分别是多少？", "keywords": ["92.7%", "90.4%", "93.2%"]},
+  {"question": "系统整体架构分哪三层？", "keywords": ["人机交互界面层", "业务逻辑处理层", "算法底层支撑层"]},
+  {"question": "三种跟踪算法的性能对比结果？", "keywords": ["40 FPS", "23 次", "15 次"]}
+]

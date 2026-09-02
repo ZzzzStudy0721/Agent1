@@ -8,8 +8,10 @@ import sys
 
 from dotenv import load_dotenv
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Must run before HF imports so HF_ENDPOINT (mirror) takes effect
-load_dotenv()
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # Fix mojibake on Windows GBK terminals
 if sys.platform == "win32":
@@ -26,8 +28,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 51  # ~10% of chunk size
-DATA_DIR = "data"
-DB_DIR = "chroma_db"
+DATA_DIR = os.path.join(BASE_DIR, "data")
+DB_DIR = os.path.join(BASE_DIR, "chroma_db")
 TOP_K = 4
 
 
@@ -45,9 +47,11 @@ def load_and_chunk(data_dir: str = DATA_DIR) -> list:
     return chunks
 
 
-def build_vectorstore(chunks: list, embeddings) -> Chroma:
+def build_vectorstore(chunks: list, embeddings, collection_name: str = "langchain") -> Chroma:
     """Embed chunks with local bge-small-zh and persist to ChromaDB."""
-    return Chroma.from_documents(chunks, embeddings, persist_directory=DB_DIR)
+    return Chroma.from_documents(
+        chunks, embeddings, persist_directory=DB_DIR, collection_name=collection_name
+    )
 
 
 def retrieve(query: str, vectorstore: Chroma, top_k: int = TOP_K) -> list:

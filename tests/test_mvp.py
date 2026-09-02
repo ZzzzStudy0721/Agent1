@@ -5,11 +5,12 @@ First run downloads the embedding model (~100MB via HF mirror, may take minutes)
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
 from dotenv import load_dotenv
 
-load_dotenv()  # before HF imports so HF_ENDPOINT takes effect
+load_dotenv(os.path.join(BASE_DIR, ".env"))  # before HF imports so HF_ENDPOINT takes effect
 
 from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
