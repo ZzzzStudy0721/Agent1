@@ -71,7 +71,7 @@ def evaluate(name, retriever_fn, questions, top_k=TOP_K):
     return recall_avg, mrr_avg
 
 
-def make_retrievers(chunks, store):
+def make_retrievers(chunks, store, reranker=None):
     bm25 = retrieval.BM25Index(chunks)
 
     def vector(q, k):
@@ -85,16 +85,25 @@ def make_retrievers(chunks, store):
         b = bm25.search(q, top_k=retrieval.CANDIDATE_K)
         return retrieval.rrf_fusion(v, b, top_k=k)
 
-    return {"vector": vector, "bm25": bm25_only, "rrf": rrf}
+    retrievers = {"vector": vector, "bm25": bm25_only, "rrf": rrf}
+    if reranker is not None:
+
+        def rerank_mode(q, k):
+            cands = rrf(q, retrieval.CANDIDATE_K)
+            return reranker.rerank(q, cands, top_k=k)
+
+        retrievers["rerank"] = rerank_mode
+    return retrievers
 
 
 if __name__ == "__main__":
     with open(EVAL_SET, encoding="utf-8") as f:
         questions = json.load(f)
+    mode = sys.argv[1] if len(sys.argv) > 1 else "all"
+    reranker = retrieval.Reranker() if mode in ("all", "rerank") else None
     chunks, store = rebuild()
     print(f"[i] vectorstore rebuilt, {len(chunks)} chunks, {len(questions)} questions\n")
-    retrievers = make_retrievers(chunks, store)
-    mode = sys.argv[1] if len(sys.argv) > 1 else "all"
-    modes = [mode] if mode != "all" else list(retrievers)
+    retrievers = make_retrievers(chunks, store, reranker)
+    modes = [mode] if mode != "all" else ["vector", "bm25", "rrf", "rerank"]
     for m in modes:
         evaluate(m, retrievers[m], questions)

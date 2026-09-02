@@ -4,9 +4,11 @@ Standalone module so it can be reused by app.py, eval scripts and later the Lang
 """
 import jieba
 from rank_bm25 import BM25Okapi
+from sentence_transformers import CrossEncoder
 
 RRF_K = 60
 CANDIDATE_K = 20  # each recaller returns this many candidates before fusion
+RERANK_MODEL = "BAAI/bge-reranker-base"
 
 
 def tokenize(text: str) -> list:
@@ -43,3 +45,16 @@ def rrf_fusion(vector_results: list, bm25_results: list, k: int = RRF_K, top_k: 
         scores[id(c)] = scores.get(id(c), 0.0) + 1.0 / (k + rank + 1)
     ranked = sorted(scores, key=scores.get, reverse=True)[:top_k]
     return [chunk_by_id[cid] for cid in ranked]
+
+
+class Reranker:
+    """CrossEncoder reranking: score each (query, chunk) pair, then sort."""
+
+    def __init__(self, model_name: str = RERANK_MODEL):
+        self.model = CrossEncoder(model_name)
+
+    def rerank(self, query: str, chunks: list, top_k: int = 4) -> list:
+        pairs = [(query, c.page_content) for c in chunks]
+        scores = self.model.predict(pairs)
+        ranked = sorted(zip(chunks, scores, strict=True), key=lambda x: x[1], reverse=True)
+        return [c for c, _ in ranked[:top_k]]
