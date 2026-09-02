@@ -19,8 +19,13 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from langchain_chroma import Chroma
 from langchain_deepseek import ChatDeepSeek
+from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import END, START, StateGraph
+
+import app
+import retrieval
 
 DEMO_QUESTIONS = [
     "你毕设中对比了哪些目标检测模型？为什么最终选择 YOLOv8n？",
@@ -29,6 +34,59 @@ DEMO_QUESTIONS = [
 ]
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
+
+_checker = None  # lazy-loaded retrieval pipeline for evidence verification
+
+
+def last_answer(state) -> str:
+    """Unwrap the latest user answer from the messages list."""
+    ans = state["messages"][-1]
+    return ans[1] if isinstance(ans, tuple) else ans
+
+
+def _get_checker():
+    """Lazily build the (vectorstore, bm25, reranker) pipeline once per process."""
+    global _checker
+    if _checker is not None:
+        return _checker
+    embeddings = HuggingFaceEmbeddings(model_name=app.EMBED_MODEL)
+    chunks = app.load_and_chunk()
+    try:
+        store = Chroma(
+            embedding_function=embeddings,
+            persist_directory=app.DB_DIR,
+            collection_name=app.COLLECTION,
+        )
+    except Exception:
+        store = app.build_vectorstore(chunks, embeddings, collection_name=app.COLLECTION)
+    _checker = (store, retrieval.BM25Index(chunks), retrieval.Reranker())
+    return _checker
+
+
+def verify_answer(answer: str) -> str:
+    """Fact-check the answer against resume/thesis (WBS 4.5, degraded version).
+
+    Returns conflict lines or "无冲突".
+    """
+    store, bm25, reranker = _get_checker()
+    v = store.similarity_search(answer, k=retrieval.CANDIDATE_K)
+    b = bm25.search(answer, top_k=retrieval.CANDIDATE_K)
+    fused = retrieval.rrf_fusion(v, b, top_k=retrieval.CANDIDATE_K)
+    ranked = reranker.rerank_with_scores(answer, fused)
+    evidence = "\n\n".join(
+        f"[{i}] {c.page_content}" for i, (c, _) in enumerate(ranked[:5], 1)
+    )
+    llm = ChatDeepSeek(model="deepseek-chat", temperature=0)
+    prompt = (
+        "你是事实核对员。对比候选人回答与简历/论文原文，只找与原文矛盾的硬事实"
+        "（数字、指标、技术选型、模块名称）。\n"
+        "输出格式（严格遵守）：\n"
+        "- 若无矛盾，只输出一行：无冲突\n"
+        "- 若有矛盾，先输出一行：发现矛盾，然后每条一行：⚠️ 回答称X，但原文是Y\n"
+        "不要列出与原文一致的项，不要解释。\n\n"
+        f"候选人回答：{answer}\n\n简历/论文原文片段：\n{evidence}"
+    )
+    return llm.invoke(prompt).content.strip()
 
 
 def load_jd(data_dir: str = DATA_DIR) -> str | None:
@@ -86,7 +144,7 @@ def followup_check(state: InterviewState) -> dict:
     if state.get("followup_count", 0) >= MAX_FOLLOWUP:
         return {"followup_verdict": "review"}
     llm = ChatDeepSeek(model="deepseek-chat", temperature=0)
-    answer = state["messages"][-1]
+    answer = last_answer(state)
     prompt = (
         "你正在面试候选人。判断以下回答是否需要追问。\n"
         "需要追问的情况（满足其一即可）：\n"
@@ -107,7 +165,7 @@ def followup_node(state: InterviewState) -> dict:
     prompt = (
         "候选人的回答不够具体。基于问题和回答，生成一个深入追问，"
         "只问一个点，不要重复原问题：\n\n"
-        f"问题：{DEMO_QUESTIONS[idx]}\n回答：{state['messages'][-1]}\n\n追问："
+        f"问题：{DEMO_QUESTIONS[idx]}\n回答：{last_answer(state)}\n\n追问："
     )
     followup = llm.invoke(prompt).content.strip()
     return {
@@ -121,7 +179,7 @@ def review_node(state: InterviewState) -> dict:
     idx = state["question_index"]
     if not state["messages"]:
         return {"output": GREETING}
-    answer = state["messages"][-1]
+    answer = last_answer(state)
     llm = ChatDeepSeek(model="deepseek-chat", temperature=0.1)
     prompt = (
         "你是面试点评官。从三个维度点评候选人回答：\n"
@@ -132,6 +190,9 @@ def review_node(state: InterviewState) -> dict:
         "给出 3-5 句点评，并指出一个最值得改进的点。"
     )
     review = llm.invoke(prompt).content
+    verification = verify_answer(answer)
+    if verification and "无冲突" not in verification:
+        review += f"\n\n{verification}"
     return {"output": review, "question_index": idx + 1, "followup_count": 0}
 
 
