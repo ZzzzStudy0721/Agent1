@@ -53,8 +53,11 @@ class Reranker:
     def __init__(self, model_name: str = RERANK_MODEL):
         self.model = CrossEncoder(model_name)
 
-    def rerank(self, query: str, chunks: list, top_k: int = 4) -> list:
+    def rerank_with_scores(self, query: str, chunks: list) -> list:
+        """Return [(chunk, score)] sorted by score desc."""
         pairs = [(query, c.page_content) for c in chunks]
         scores = self.model.predict(pairs)
-        ranked = sorted(zip(chunks, scores, strict=True), key=lambda x: x[1], reverse=True)
-        return [c for c, _ in ranked[:top_k]]
+        return sorted(zip(chunks, scores, strict=True), key=lambda x: x[1], reverse=True)
+
+    def rerank(self, query: str, chunks: list, top_k: int = 4) -> list:
+        return [c for c, _ in self.rerank_with_scores(query, chunks)[:top_k]]

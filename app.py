@@ -25,12 +25,19 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+import retrieval
+
 EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 51  # ~10% of chunk size
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_DIR = os.path.join(BASE_DIR, "chroma_db")
 TOP_K = 4
+COLLECTION = "kb_full"
+# Guardrail: refuse when the best rerank score is below this.
+# Probed 2026-09-02: relevant 0.876~0.999, irrelevant 0.000~0.028.
+RERANK_THRESHOLD = 0.5
+REFUSAL = "知识库中没有相关信息，无法回答。"
 
 
 def load_and_chunk(data_dir: str = DATA_DIR) -> list:
@@ -76,24 +83,38 @@ def generate(query: str, context_docs: list, llm) -> str:
     return llm.invoke(messages).content
 
 
+def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
+    """Hybrid retrieval + rerank with refusal guardrail (M2 pipeline)."""
+    v = vectorstore.similarity_search(query, k=retrieval.CANDIDATE_K)
+    b = bm25.search(query, top_k=retrieval.CANDIDATE_K)
+    fused = retrieval.rrf_fusion(v, b, top_k=retrieval.CANDIDATE_K)
+    ranked = reranker.rerank_with_scores(query, fused)
+    if not ranked or ranked[0][1] < RERANK_THRESHOLD:
+        return REFUSAL
+    docs = [c for c, _ in ranked[:top_k]]
+    return generate(query, docs, llm)
+
+
 def main():
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
     llm = ChatDeepSeek(model="deepseek-chat", temperature=0.1)
 
+    chunks = load_and_chunk()
+    if not chunks:
+        print("[!] No md/txt files found under data/. Put your resume/project docs there first.")
+        return
+    bm25 = retrieval.BM25Index(chunks)
+
     if os.path.isdir(DB_DIR):
         vectorstore = Chroma(
-            embedding_function=embeddings, persist_directory=DB_DIR
+            embedding_function=embeddings, persist_directory=DB_DIR, collection_name=COLLECTION
         )
         print(f"[i] Loaded existing vector store ({DB_DIR})")
     else:
-        chunks = load_and_chunk()
-        if not chunks:
-            print("[!] No md/txt files found under data/. Put your resume/project docs there first.")
-            return
-        print(f"[i] {len(chunks)} chunks loaded from {DATA_DIR}/")
-        vectorstore = build_vectorstore(chunks, embeddings)
-        print(f"[i] Vector store persisted to {DB_DIR}")
+        vectorstore = build_vectorstore(chunks, embeddings, collection_name=COLLECTION)
+        print(f"[i] {len(chunks)} chunks indexed, vector store persisted to {DB_DIR}")
 
+    reranker = retrieval.Reranker()
     print("Ask questions about your resume/projects (input 'quit' to exit).")
     while True:
         query = input("\nQ: ").strip()
@@ -101,8 +122,7 @@ def main():
             break
         if not query:
             continue
-        docs = retrieve(query, vectorstore)
-        answer = generate(query, docs, llm)
+        answer = answer_question(query, vectorstore, bm25, reranker, llm)
         print(f"\nA: {answer}")
 
 
