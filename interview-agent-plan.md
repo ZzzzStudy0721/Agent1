@@ -52,7 +52,7 @@
 
 ### 1.5 技术栈(已定,见决策记录)
 
-LangChain(init_chat_model 多后端:`models.get_chat_model` 工厂,`CHAT_MODEL` env 一行切换,DeepSeek 默认 / Claude 可切换)+ LangGraph + ChromaDB + FastAPI + Streamlit
+LangChain(`models.get_chat_model` 工厂:init_chat_model 推断 + OpenAI 兼容端点兜底,DeepSeek 默认实测 / GLM 等兼容厂商可接 / Claude 分支代码就绪,锁区不实测)+ LangGraph + ChromaDB + FastAPI + Streamlit
 Embedding:本地 `bge-small-zh-v1.5`(HuggingFace,已落地);Reranker:本地 `BGE-reranker-base`(CrossEncoder,已落地)
 
 ---
@@ -137,7 +137,7 @@ Embedding:本地 `bge-small-zh-v1.5`(HuggingFace,已落地);Reranker:本地 `BGE
 | R4 | 范围蔓延(想加语音、爬虫) | P2 清单已白纸黑字"本版不做" |
 | R5 | 项目挤压投递时间 | 投递 9 月第一周启动,与开发并行 |
 | R6 | DeepSeek API 限流/费用 | 控制单次调用 token;检索结果精简后拼接 |
-| R7 | Claude API 注册/计费门槛 | 仅用 Haiku 做最小验证(几毛钱),生产仍走 DeepSeek;双后端只求跑通不求压测 |
+| R7 | Claude API 锁区无法注册(大陆账号有封号风险) | 第二实测后端改用 OpenAI 兼容国内模型(智谱 GLM 等,国内可注册);Claude 分支代码就绪不实测,README/文档如实标注 |
 
 ### 3.4 验收标准(M4 时逐条核对)
 
@@ -159,10 +159,10 @@ Embedding:本地 `bge-small-zh-v1.5`(HuggingFace,已落地);Reranker:本地 `BGE
 | 2026-08-28 | 模型:纯 DeepSeek | 现成 key、零成本、国内网络稳;代价是简历缺 Claude API 关键词 |
 | 2026-09-01 | 模型层:多后端可插拔 | 补 Claude API 经验缺口(招聘需求 P0 隐含要求);DeepSeek 仍为默认(成本/国内网络),Claude 用 Haiku 验证即可 |
 | 2026-09-03 | 对话模式:v1 固定流程 → v2 自由决策路由 | 刻意重构(9.3 commit 7b524db):v1 是 9.2 的反馈式循环——固定题单不感知回答内容、每答必点评打断节奏、追问规则穷举有天花板;v2 话题锚点 + LLM 决策路由(followup/switch_topic/end),点评集中到 wrap,程序护栏(追问上限/覆盖率/轮数)防跑偏 |
-| 2026-09-03 | 多后端落地:models.get_chat_model 工厂 | 兑现 9-01 决策:封装 langchain init_chat_model,`CHAT_MODEL` env 一行切换(DeepSeek 默认/Claude 可切换),commit c9f3bca;Claude Haiku 最小验证待 ANTHROPIC_API_KEY |
+| 2026-09-03 | 多后端落地:models.get_chat_model 工厂 | 封装 init_chat_model + OpenAI 兼容端点兜底(commit c9f3bca/c44ad77):DeepSeek 默认实测;GLM 等国内模型走 CHAT_BASE_URL 可实测;Claude 分支代码就绪——后发现 Anthropic 锁国区、注册有封号风险,放弃实测,原「Haiku 验证几毛钱」预案作废(见 R7) |
 | 2026-09-03 | 追问上限硬化:3 轮程序护栏 | 同一话题追问上限原为 prompt 软约束(2 轮,LLM 可能违反);改为 MAX_FOLLOWUPS=3 + state 计数,_sanitize_decision 超限强制切题(commit 10ce3ae) |
 
-**面试话术备忘**:"为什么用 DeepSeek?"→ RAG 架构与模型解耦,模型层可插拔——项目实际跑通 DeepSeek 与 Claude 双后端,默认 DeepSeek 是成本/可用性决策,切换只改一行配置。
+**面试话术备忘**:"为什么用 DeepSeek?"→ RAG 架构与模型解耦,模型层可插拔——项目实际跑通 DeepSeek 与 OpenAI 兼容双后端(可接智谱 GLM 等国内模型);Claude 分支代码就绪(LangChain init_chat_model 原生支持),因 Anthropic 不对大陆开放未实测;默认 DeepSeek 是成本/可用性决策,切换只改 .env 三行。
 
 ---
 
@@ -195,7 +195,7 @@ Embedding:本地 `bge-small-zh-v1.5`(HuggingFace,已落地);Reranker:本地 `BGE
 
 | 任务 | 状态 | 备注 |
 |---|---|---|
-| #1 环境搭建 | ✅ 9.1-9.3 | 依赖已装;模型工厂 models.py(9.3 commit c9f3bca);Claude 最小验证待 ANTHROPIC_API_KEY(R7) |
+| #1 环境搭建 | ✅ 9.1-9.3 | 依赖已装;模型工厂 models.py(9.3,见决策记录);Claude 分支代码就绪不实测(锁区,R7) |
 | #2 基础 RAG + 检索质量层 | ✅ 9.1-9.2 | M1 9.1 / M2 9.2 完成;embedding=本地 bge-small-zh-v1.5,reranker=本地 BGE-reranker-base |
 | #3 面试状态机 | ✅ 9.3 | v2 自由决策路由版(7b524db 起)+ 追问 3 轮硬护栏(10ce3ae);9.2 的 v1 固定流程已被刻意推翻,见决策记录 |
 | #4 API+UI+评估+包装+投递 | 🟡 进行中 | API/UI/README/消融表已提交(9.2);剩:简历 STAR 条目更新(5.6)+ 验收标准 6 条逐条核对;投递为并行线,见实施统筹 |

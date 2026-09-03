@@ -6,7 +6,7 @@
 
 ## 技术栈
 
-`LangChain` · `LangGraph` · `ChromaDB` · `FastAPI` · `Streamlit` · `DeepSeek / Claude` 双后端（`init_chat_model`，`CHAT_MODEL` 一行切换）· `BM25 + RRF` · `CrossEncoder 重排` · 本地 `bge-small-zh-v1.5` embedding
+`LangChain` · `LangGraph` · `ChromaDB` · `FastAPI` · `Streamlit` · 多后端可切换（DeepSeek 实测默认 + OpenAI 兼容端点接 GLM 等国内模型 + Claude 分支就绪）· `BM25 + RRF` · `CrossEncoder 重排` · 本地 `bge-small-zh-v1.5` embedding
 
 ## 核心特性
 
@@ -128,6 +128,7 @@ python tests/test_topics.py       # 话题锚点抽取
 python tests/test_evidence.py     # 证据核实
 python tests/test_tool.py         # Tool Calling
 python tests/test_fastapi.py      # FastAPI 接口
+python tests/test_models.py       # 模型工厂多后端解析
 ```
 
 ## 项目结构
@@ -136,7 +137,7 @@ python tests/test_fastapi.py      # FastAPI 接口
 ├── app.py            # RAG 问答：加载→切分→向量化→混合检索→重排→拒答→生成
 ├── retrieval.py      # BM25 索引、RRF 融合、CrossEncoder 重排
 ├── agent.py          # LangGraph 面试状态机 + LLM 决策路由 + 话题锚点 + 证据核实 + Tool
-├── models.py         # 模型工厂：CHAT_MODEL env 切换 DeepSeek / Claude
+├── models.py         # 模型工厂：DeepSeek / OpenAI 兼容（GLM 等）/ Claude 分支，env 切换
 ├── api.py            # FastAPI 服务层（/chat、/upload）
 ├── ui.py             # Streamlit 界面（问答 + 模拟面试）
 ├── data/             # 知识库（gitignore）
@@ -146,7 +147,7 @@ python tests/test_fastapi.py      # FastAPI 接口
 
 ## 设计决策
 
-- **为什么模型层用 DeepSeek**：RAG 架构与模型解耦，模型层可插拔；DeepSeek 是成本/可用性决策，切换其他模型只需改配置。
+- **为什么模型层用 DeepSeek**：RAG 架构与模型解耦，模型层可插拔；DeepSeek 是成本/可用性决策，切换其他模型只需改配置（实测 DeepSeek + OpenAI 兼容端点；Claude 分支代码就绪，Anthropic 官方不对大陆开放故未实测）。
 - **为什么自由对话用状态机实现而非纯 LLM 对话**：纯自由对话会跑偏（话题漂移、忘记面试目的、迟迟不结束）；状态机 + LLM 决策路由让对话自由但有边界——话题锚点限定出题范围，轮数与覆盖率护栏强制收尾，每轮决策结构化、可解释。
 - **拒答门限为什么用向量相似度而非重排分数**：英文预训练的重排模型对中文口语问法打分不稳定（实测相关问法低至 0.019 与无关问法 0.028 无法区分）；中文 embedding 的相似度信号实测相关 0.283~0.656 vs 无关 0.011~0.127，可稳定分离。
 
