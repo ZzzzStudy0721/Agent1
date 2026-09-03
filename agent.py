@@ -37,6 +37,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
 
 MAX_ROUNDS = 20  # hard cap on interviewer turns (guardrail)
+MAX_FOLLOWUPS = 3  # hard cap on follow-up rounds per topic (guardrail)
 
 GREETING = (
     "你好，我是你的 AI 面试官。今天围绕你的简历和岗位 JD 自由提问，没有固定题单。"
@@ -68,6 +69,7 @@ class InterviewState(TypedDict):
     topics: list  # topic anchors, e.g. "毕设深挖：车辆检测与计数的技术细节"
     covered_topics: list  # 1-based indexes of finished topics (program-maintained)
     current_topic: int  # 1-based index of the active topic, 0 = none yet
+    topic_round_count: int  # follow-up rounds on the current topic (program-maintained)
     round_count: int  # interviewer turns so far
     decision: dict  # {"action": ..., "topic_index": ...}, set by decision node
     output: Annotated[str, operator.add]  # text added this round
@@ -230,9 +232,23 @@ def _valid_topic_index(idx: int, topics: list, covered: list) -> int:
     return 0
 
 
-def _sanitize_decision(d: Decision, topics: list, covered: list) -> Decision:
-    """Programmatic guardrail on the LLM decision: a switch_topic request must
-    point at an uncovered topic, otherwise end the interview."""
+def _sanitize_decision(
+    d: Decision, topics: list, covered: list, current_topic: int = 0, topic_rounds: int = 0
+) -> Decision:
+    """Programmatic guardrails on the LLM decision:
+    - a followup request past MAX_FOLLOWUPS rounds on the current topic is
+      forced to switch to an uncovered topic (or end when none is left);
+    - a switch_topic request must point at an uncovered topic, otherwise end.
+    """
+    if d.action == "followup" and topic_rounds >= MAX_FOLLOWUPS:
+        # 当前话题已追问到上限：即使 LLM 想继续深挖，也强制切走。
+        # current_topic is treated as covered here so the forced switch never
+        # lands back on the topic we are trying to leave.
+        available = covered + ([current_topic] if current_topic else [])
+        idx = _valid_topic_index(0, topics, available)
+        if idx == 0:
+            return Decision(action="end")
+        return Decision(action="switch_topic", topic_index=idx)
     if d.action == "switch_topic":
         idx = _valid_topic_index(d.topic_index, topics, covered)
         if idx == 0:
@@ -281,7 +297,9 @@ def decision_node(state: InterviewState) -> dict:
         "- end：所有话题基本覆盖、对话已充分，可以结束面试\n\n"
         f"话题清单（编号. 话题名：考察说明）：\n{topic_list}\n\n"
         f"已覆盖话题编号：{covered or '无'}\n"
-        f"当前话题编号：{state['current_topic'] or '无'}\n\n"
+        f"当前话题编号：{state['current_topic'] or '无'}\n"
+        f"当前话题已追问轮数：{state['topic_round_count']}（上限 {MAX_FOLLOWUPS} 轮，"
+        "达到后必须 switch_topic）\n\n"
         "规则：\n"
         "1. 回答过短（少于 30 字）或缺量化数据时优先 followup\n"
         "2. 同一话题最多追问 3 轮，之后必须换话题\n"
@@ -298,7 +316,11 @@ def decision_node(state: InterviewState) -> dict:
         d = None
     if d is None:
         d = Decision(action="switch_topic")
-    d = _sanitize_decision(d, topics, covered)
+    d = _sanitize_decision(
+        d, topics, covered,
+        current_topic=state["current_topic"],
+        topic_rounds=state["topic_round_count"],
+    )
     return {"decision": d.model_dump()}
 
 
@@ -339,15 +361,18 @@ def interviewer_node(state: InterviewState) -> dict:
         if state["current_topic"] and state["current_topic"] not in covered:
             covered = covered + [state["current_topic"]]
         current_topic = idx
+        topic_rounds = 0  # fresh topic: reset the follow-up counter
         text = _ask_topic_question(topics[idx - 1], history)
     else:  # followup
         current_topic = state["current_topic"]
+        topic_rounds = state["topic_round_count"] + 1
         topic_text = topics[current_topic - 1] if current_topic else "自由话题"
         text = _ask_followup(topic_text, history)
     return {
         "messages": [("assistant", text)],
         "output": text,
         "current_topic": current_topic,
+        "topic_round_count": topic_rounds,
         "covered_topics": covered,
         "round_count": state["round_count"] + 1,
     }
@@ -416,6 +441,7 @@ def init_state(topics: list | None = None) -> InterviewState:
         "topics": topics or DEFAULT_TOPICS,
         "covered_topics": [],
         "current_topic": 0,
+        "topic_round_count": 0,
         "round_count": 0,
         "decision": {},
         "output": "",

@@ -43,6 +43,33 @@ def test_sanitize_decision():
     assert d.action == "end"
 
 
+def test_followup_cap_guardrail():
+    """A followup request past MAX_FOLLOWUPS on the current topic is forced to
+    switch to an uncovered topic (or end when none is left)."""
+    # below the cap: followup passes through untouched
+    d = agent._sanitize_decision(
+        agent.Decision(action="followup"), TOPICS, [], current_topic=1, topic_rounds=2
+    )
+    assert d.action == "followup"
+    # at the cap: followup is forced into switch_topic, never back to topic 1
+    d = agent._sanitize_decision(
+        agent.Decision(action="followup"), TOPICS, [], current_topic=1, topic_rounds=3
+    )
+    assert d.action == "switch_topic"
+    assert d.topic_index != 1, "forced switch must leave the current topic"
+    assert d.topic_index in (2, 3)
+    # the forced target is always an uncovered topic
+    d = agent._sanitize_decision(
+        agent.Decision(action="followup"), TOPICS, [1, 2], current_topic=1, topic_rounds=3
+    )
+    assert d.topic_index == 3
+    # no topic left to switch to -> end
+    d = agent._sanitize_decision(
+        agent.Decision(action="followup"), TOPICS, [2, 3], current_topic=1, topic_rounds=5
+    )
+    assert d.action == "end"
+
+
 def test_route_start_guardrails():
     base = agent.init_state(TOPICS)
     # round cap forces wrap before any LLM call
@@ -83,6 +110,7 @@ def test_live_short_answer_round():
 if __name__ == "__main__":
     test_valid_topic_index()
     test_sanitize_decision()
+    test_followup_cap_guardrail()
     test_route_start_guardrails()
     test_route_after_decision()
     test_live_short_answer_round()
