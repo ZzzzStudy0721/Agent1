@@ -428,7 +428,7 @@ def run_interview():
     print(f"[i] 话题锚点已就绪（{len(topics)} 个）")
     graph = build_graph()
     state = init_state(topics)
-    print("\n" + GREETING)
+    print("\n面试官：" + GREETING)
     while True:
         answer = input("\n你的回答：").strip()
         if answer.lower() in ("quit", "exit", "q"):
@@ -439,7 +439,8 @@ def run_interview():
         state["decision"] = {}
         result = graph.invoke(state)
         state = dict(result)
-        print(state["output"])
+        if state["output"]:
+            print("\n面试官：" + state["output"])
         if state["finished"]:
             break
 
