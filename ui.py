@@ -64,44 +64,32 @@ if page == "💬 知识库问答":
 # ---------------- Mock interview page (local LangGraph agent) ----------------
 elif page == "🎤 模拟面试":
     st.caption(
-        "AI 面试官：JD 定制出题 → 追问（最多 2 轮）→ 三维度点评 → "
-        "证据核实（与简历矛盾点出）→ 复盘报告导出。首次启动需加载模型，请耐心等待。"
+        "AI 面试官：基于 JD+简历抽取话题锚点，自由对话 + 即兴追问，"
+        "话题覆盖与轮数护栏防止跑偏；结束后统一复盘 + 证据核实 + 报告导出。"
+        "首次启动需加载模型，请耐心等待。"
     )
 
     def start_interview():
-        jd_text = agent.load_jd()
-        if jd_text:
-            with st.spinner("基于 JD 生成面试题中…"):
-                agent.DEMO_QUESTIONS[:] = agent.generate_questions(jd_text)
+        with st.spinner("话题锚点抽取中…"):
+            topics = agent.prepare_topics()
         graph = agent.build_graph()
         st.session_state.interview = {
             "graph": graph,
-            "history": [],
-            "state": {
-                "messages": [],
-                "question_index": 0,
-                "followup_count": 0,
-                "followup_verdict": "",
-                "output": "",
-            },
-            "log": [],
+            "state": agent.init_state(topics),
+            "log": [("assistant", agent.GREETING)],
             "finished": False,
         }
-        # first invoke: greeting + question 1
-        with st.spinner("面试官就位中…"):
-            result = graph.invoke(st.session_state.interview["state"])
-        st.session_state.interview["log"].append(("assistant", result["output"]))
-        st.session_state.interview["state"] = dict(result)
 
     def advance(answer):
         it = st.session_state.interview
-        it["history"].append(("user", answer))
-        it["state"]["messages"] = it["history"]
+        it["log"].append(("user", answer))
+        it["state"]["messages"] = it["state"]["messages"] + [("user", answer)]
         it["state"]["output"] = ""
+        it["state"]["decision"] = {}
         result = it["graph"].invoke(it["state"])
         it["log"].append(("assistant", result["output"]))
         it["state"] = dict(result)
-        it["finished"] = result["question_index"] >= len(agent.DEMO_QUESTIONS)
+        it["finished"] = result["finished"]
 
     if st.button("开始 / 重新开始面试") or st.session_state.pop("start_interview", False):
         start_interview()
@@ -119,6 +107,6 @@ elif page == "🎤 模拟面试":
                 with st.chat_message("user"):
                     st.write(answer)
                 with st.chat_message("assistant"):
-                    with st.spinner("面试官思考中（检索 + 点评 + 证据核实，约 1 分钟）…"):
+                    with st.spinner("面试官思考中…"):
                         advance(answer)
                 st.rerun()

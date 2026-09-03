@@ -1,4 +1,5 @@
-"""Follow-up chain test (WBS 4.4): short answers trigger follow-ups, max 2 rounds.
+"""Decision routing guardrail tests (WBS 4.4, v2): pure-function checks need no
+LLM calls; one live round checks that a decision keeps the interview open.
 
 Usage: python tests/test_followup.py
 """
@@ -14,39 +15,75 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent
 
-SHORT = "用了 YOLOv8n。"
+TOPICS = ["话题A：说明A", "话题B：说明B", "话题C：说明C"]
 
 
-def invoke_with(graph, history, idx, followup_count):
-    state = {
-        "messages": history,
-        "question_index": idx,
-        "followup_count": followup_count,
-        "followup_verdict": "",
-        "output": "",
-    }
-    return graph.invoke(state)
+def test_valid_topic_index():
+    # invalid index falls back to the first uncovered topic
+    assert agent._valid_topic_index(99, TOPICS, []) == 1
+    assert agent._valid_topic_index(1, TOPICS, [1]) == 2
+    assert agent._valid_topic_index(3, TOPICS, [1, 2]) == 3
+    # all covered -> 0
+    assert agent._valid_topic_index(1, TOPICS, [1, 2, 3]) == 0
 
 
-def test_short_answer_triggers_followup():
+def test_sanitize_decision():
+    # switch_topic with no uncovered topic left -> end
+    d = agent._sanitize_decision(agent.Decision(action="switch_topic"), TOPICS, [1, 2, 3])
+    assert d.action == "end"
+    # switch_topic pointing at a covered topic -> first uncovered one
+    d = agent._sanitize_decision(
+        agent.Decision(action="switch_topic", topic_index=1), TOPICS, [1]
+    )
+    assert d.topic_index == 2
+    # followup / end pass through untouched
+    d = agent._sanitize_decision(agent.Decision(action="followup"), TOPICS, [])
+    assert d.action == "followup"
+    d = agent._sanitize_decision(agent.Decision(action="end"), TOPICS, [])
+    assert d.action == "end"
+
+
+def test_route_start_guardrails():
+    base = agent.init_state(TOPICS)
+    # round cap forces wrap before any LLM call
+    s = {**base, "round_count": agent.MAX_ROUNDS}
+    assert agent.route_start(s) == "wrap"
+    # all topics covered forces wrap
+    s = {**base, "covered_topics": [1, 2, 3]}
+    assert agent.route_start(s) == "wrap"
+    # otherwise go to the decision node
+    assert agent.route_start(base) == "decision"
+
+
+def test_route_after_decision():
+    base = agent.init_state(TOPICS)
+    # end decision wraps
+    s = {**base, "decision": {"action": "end"}}
+    assert agent.route_after_decision(s) == "wrap"
+    # otherwise route to interviewer
+    s = {**base, "decision": {"action": "followup"}}
+    assert agent.route_after_decision(s) == "interviewer"
+    s = {**base, "decision": {"action": "switch_topic", "topic_index": 2}}
+    assert agent.route_after_decision(s) == "interviewer"
+
+
+def test_live_short_answer_round():
+    # one live round: short answer, graph must return one question and stay open
     graph = agent.build_graph()
-    history = [("user", SHORT)]
-    result = invoke_with(graph, history, idx=0, followup_count=0)
-    print(f"[short answer] output: {result['output'][:100]!r}")
-    assert "追问" in result["output"], "short answer should trigger a follow-up"
-    assert result["question_index"] == 0, "follow-up should not advance the question"
-
-
-def test_followup_capped_at_two_rounds():
-    graph = agent.build_graph()
-    history = [("user", SHORT)]
-    result = invoke_with(graph, history, idx=0, followup_count=2)
-    print(f"[cap at 2] output: {result['output'][:100]!r}")
-    assert "追问" not in result["output"], "follow-up must be capped at 2 rounds"
-    assert result["question_index"] == 1, "after cap, review should advance the question"
+    state = agent.init_state(TOPICS)
+    state["messages"] = [("user", "用了 YOLOv8n。")]
+    result = graph.invoke(state)
+    print(f"[live round] output: {result['output'][:100]!r}")
+    assert result["output"], "empty output"
+    assert result["round_count"] == 1
+    assert not result["finished"], "interview should not end after one round"
+    assert result["messages"][-1][0] == "assistant"
 
 
 if __name__ == "__main__":
-    test_short_answer_triggers_followup()
-    test_followup_capped_at_two_rounds()
-    print("\nFollow-up test passed")
+    test_valid_topic_index()
+    test_sanitize_decision()
+    test_route_start_guardrails()
+    test_route_after_decision()
+    test_live_short_answer_round()
+    print("\nFollow-up / routing test passed")

@@ -1,15 +1,19 @@
-"""Interviewer agent (M3): LangGraph state machine driving the interview flow.
+"""Interviewer agent (M3, v2): free-form interview driven by a loop state machine.
 
-Graph: START -> followup_check -> (followup | review) -> route -> (ask | wrap) -> END
-Each CLI round invokes the graph once: the user's previous answer comes in via
-state["messages"], the review node scores it, then the graph asks the next
-question or wraps up. Questions are generated from a JD file in data/ (WBS 4.2).
+The graph is a DAG invoked once per CLI/UI round; the conversational loop lives in
+the Python driver (run_interview / ui.advance). Inside the graph, an LLM decision
+node (structured output) routes to the interviewer node (ask a follow-up or switch
+topic) or the wrap node (debrief + evidence verification + report export).
+Programmatic guardrails (topic coverage, round cap) keep the free-form
+conversation from drifting (WBS 4.2/4.4).
+
+Graph: START -> guardrails -> (decision -> (interviewer | wrap) | wrap) -> END
 """
 import operator
 import os
 import re
 import sys
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from dotenv import load_dotenv
 
@@ -24,18 +28,50 @@ from langchain_core.tools import tool
 from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel
 
 import app
 import retrieval
 
-DEMO_QUESTIONS = [
-    "你毕设中对比了哪些目标检测模型？为什么最终选择 YOLOv8n？",
-    "车辆计数采用了什么算法？有哪些防误计机制？",
-    "你平时如何与 AI 协作完成开发？",
-]
-
 DATA_DIR = os.path.join(BASE_DIR, "data")
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+
+MAX_ROUNDS = 20  # hard cap on interviewer turns (guardrail)
+
+GREETING = (
+    "你好，我是你的 AI 面试官。今天围绕你的简历和岗位 JD 自由提问，没有固定题单。"
+    "请先简单介绍一下你自己，我会根据你的回答深入追问。"
+)
+
+# Fallback topic anchors when data/ is empty or topic extraction fails.
+DEFAULT_TOPICS = [
+    "毕设项目深挖：车辆检测与计数的技术细节",
+    "模型选型：为什么选 YOLOv8n、对比实验怎么做的",
+    "工程落地：系统架构、性能与部署方案",
+    "AI 协作经验：如何用 AI 辅助开发、Vibe Coding 流程",
+    "项目难点：遇到的最大挑战与解决思路",
+    "技术视野：对 RAG、Agent 等新技术的理解",
+    "学习能力：转方向与快速上手新技术的经历",
+    "职业规划：求职方向与个人定位",
+]
+
+
+class Decision(BaseModel):
+    """Structured output of the decision node."""
+
+    action: Literal["followup", "switch_topic", "end"]
+    topic_index: int = 0  # 1-based index into the topic list; only for switch_topic
+
+
+class InterviewState(TypedDict):
+    messages: Annotated[list, operator.add]  # full ("role", text) history
+    topics: list  # topic anchors, e.g. "毕设深挖：车辆检测与计数的技术细节"
+    covered_topics: list  # 1-based indexes of finished topics (program-maintained)
+    current_topic: int  # 1-based index of the active topic, 0 = none yet
+    round_count: int  # interviewer turns so far
+    decision: dict  # {"action": ..., "topic_index": ...}, set by decision node
+    output: Annotated[str, operator.add]  # text added this round
+    finished: bool
 
 
 @tool
@@ -54,12 +90,6 @@ def export_report(filename: str, content: str) -> str:
 
 
 _checker = None  # lazy-loaded retrieval pipeline for evidence verification
-
-
-def last_answer(state) -> str:
-    """Unwrap the latest user answer from the messages list."""
-    ans = state["messages"][-1]
-    return ans[1] if isinstance(ans, tuple) else ans
 
 
 def _get_checker():
@@ -92,12 +122,15 @@ def verify_answer(answer: str) -> str:
     fused = retrieval.rrf_fusion(v, b, top_k=retrieval.CANDIDATE_K)
     ranked = reranker.rerank_with_scores(answer, fused)
     evidence = "\n\n".join(
-        f"[{i}] {c.page_content}" for i, (c, _) in enumerate(ranked[:5], 1)
+        f"[{i}] {c.page_content}" for i, (c, _) in enumerate(ranked[:8], 1)
     )
     llm = ChatDeepSeek(model="deepseek-chat", temperature=0)
     prompt = (
-        "你是事实核对员。对比候选人回答与简历/论文原文，只找与原文矛盾的硬事实"
+        "你是事实核对员。对比候选人回答与简历/论文原文，只找与原文明确相反的硬事实"
         "（数字、指标、技术选型、模块名称）。\n"
+        "判定规则（严格遵守）：\n"
+        "- 原文未提及的内容不算矛盾（宁可漏报，不可错报）\n"
+        "- 只有回答与原文在数字、指标、技术选型上明确冲突时才算矛盾\n"
         "输出格式（严格遵守）：\n"
         "- 若无矛盾，只输出一行：无冲突\n"
         "- 若有矛盾，先输出一行：发现矛盾，然后每条一行：⚠️ 回答称X，但原文是Y\n"
@@ -106,6 +139,8 @@ def verify_answer(answer: str) -> str:
     )
     return llm.invoke(prompt).content.strip()
 
+
+# ---------------- knowledge base loading & topic extraction ----------------
 
 def load_jd(data_dir: str = DATA_DIR) -> str | None:
     """Read the first file whose name contains 'JD' from the knowledge base."""
@@ -118,126 +153,227 @@ def load_jd(data_dir: str = DATA_DIR) -> str | None:
     return None
 
 
-def generate_questions(jd_text: str, n: int = 10) -> list:
-    """Generate n interview questions from a JD (WBS 4.2)."""
+def load_resume(data_dir: str = DATA_DIR, max_chars: int = 8000) -> str:
+    """Read non-JD knowledge-base files (resume / thesis / project docs)."""
+    if not os.path.isdir(data_dir):
+        return ""
+    parts = []
+    for name in sorted(os.listdir(data_dir)):
+        if "JD" not in name and name.endswith((".md", ".txt")):
+            with open(os.path.join(data_dir, name), encoding="utf-8") as f:
+                parts.append(f.read())
+    return "\n\n".join(parts)[:max_chars]
+
+
+def parse_topics(text: str) -> list:
+    """Parse LLM output lines of the form 'name：description' into topic anchors."""
+    topics = []
+    for line in text.splitlines():
+        line = line.strip().strip("*").strip()  # tolerate markdown bold
+        line = re.sub(r"^\d+[.、]\s*", "", line)
+        if "：" not in line and ":" not in line:
+            continue
+        name, desc = re.split(r"[:：]", line, maxsplit=1)
+        name, desc = name.strip(), desc.strip().strip("*").strip()
+        if 0 < len(name) <= 12 and desc:
+            topics.append(f"{name}：{desc}")
+    return topics
+
+
+def generate_topics(jd_text: str, resume_text: str, n: int = 8) -> list:
+    """Extract n interview topic anchors from JD + resume (WBS 4.2, v2)."""
     llm = ChatDeepSeek(model="deepseek-chat", temperature=0.3)
     prompt = (
-        "你是资深面试官。根据岗位 JD 生成面试题。要求：\n"
-        "1. 围绕 JD 的技术关键词（如 RAG、LangGraph、AI Agent、Python）出题\n"
-        "2. 结合 JD 中的业务场景（如知识库问答、工单总结、自动化工作流）\n"
-        "3. 每题可独立回答，不是连环题\n"
-        f"生成 {n} 道题，每行一题，格式：1. 题目\n\nJD：\n{jd_text}"
+        "你是资深面试官。根据岗位 JD 和候选人简历/项目经历，抽取面试话题锚点。\n"
+        "要求：\n"
+        f"1. 共 {n} 个话题，JD 技术要求与候选人项目经历都要覆盖\n"
+        "2. 每个话题一行，格式：名称：一句话说明（例如：模型选型：为什么最终选 YOLOv8n）\n"
+        "3. 名称简短（2-8 字），说明不超过 30 字，话题之间不重叠\n\n"
+        f"JD：\n{jd_text or '（无）'}\n\n"
+        f"候选人简历/项目经历：\n{resume_text or '（无）'}"
     )
     text = llm.invoke(prompt).content
-    questions = [
-        re.sub(r"^\d+[.、]\s*", "", line)
-        for line in text.splitlines()
-        if re.match(r"^\d+[.、]", line.strip())
-    ]
-    return questions[:n]
-
-GREETING = (
-    "你好，我是你的 AI 面试官。今天围绕你的简历和项目经历提问，"
-    "请尽量用具体数据和技术细节回答。让我们开始。"
-)
-
-MAX_FOLLOWUP = 2  # follow-up rounds per question (WBS 4.4 degraded version)
-
-
-class InterviewState(TypedDict):
-    messages: Annotated[list, operator.add]  # user answers accumulate across rounds
-    question_index: int
-    followup_count: int  # how many follow-ups already asked for current question
-    followup_verdict: str  # "followup" | "review", set by followup_check for routing
-    # str + operator.add concatenates, so review text and question text both
-    # survive the round instead of the later node overwriting the earlier one
-    output: Annotated[str, operator.add]
+    topics = parse_topics(text)
+    # de-duplicate topic names: LLMs sometimes parrot the format template
+    seen = set()
+    deduped = []
+    for t in topics:
+        name = t.split("：", 1)[0]
+        if name not in seen:
+            seen.add(name)
+            deduped.append(t)
+    topics = deduped
+    if len(topics) < n:
+        topics += [t for t in DEFAULT_TOPICS if t not in topics][: n - len(topics)]
+    return topics[:n]
 
 
-def followup_check(state: InterviewState) -> dict:
-    """Decide: ask a follow-up (short/vague/evasive answer, max 2 rounds) or review."""
-    idx = state["question_index"]
-    if idx >= len(DEMO_QUESTIONS) or not state["messages"]:
-        return {"followup_verdict": "review"}
-    if state.get("followup_count", 0) >= MAX_FOLLOWUP:
-        return {"followup_verdict": "review"}
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0)
-    answer = last_answer(state)
-    prompt = (
-        "你正在面试候选人。判断以下回答是否需要追问。\n"
-        "需要追问的情况（满足其一即可）：\n"
-        "1. 回答过短（少于 30 字）\n"
-        "2. 缺少量化细节或具体数据\n"
-        "3. 回避了问题核心\n\n"
-        f"问题：{DEMO_QUESTIONS[idx]}\n回答：{answer}\n\n"
-        "只输出一个字：追 或 过"
+def prepare_topics(n: int = 8) -> list:
+    """Build topic anchors from data/ if available, else the fallback list."""
+    jd_text = load_jd()
+    resume_text = load_resume()
+    if jd_text or resume_text:
+        return generate_topics(jd_text or "", resume_text or "", n)
+    return DEFAULT_TOPICS[:n]
+
+
+# ---------------- decision routing helpers (pure, unit-testable) ----------------
+
+def _valid_topic_index(idx: int, topics: list, covered: list) -> int:
+    """Return idx if it is a valid uncovered 1-based topic index, else the first
+    uncovered one (0 if all topics are covered)."""
+    if 1 <= idx <= len(topics) and idx not in covered:
+        return idx
+    for i in range(1, len(topics) + 1):
+        if i not in covered:
+            return i
+    return 0
+
+
+def _sanitize_decision(d: Decision, topics: list, covered: list) -> Decision:
+    """Programmatic guardrail on the LLM decision: a switch_topic request must
+    point at an uncovered topic, otherwise end the interview."""
+    if d.action == "switch_topic":
+        idx = _valid_topic_index(d.topic_index, topics, covered)
+        if idx == 0:
+            return Decision(action="end")
+        return Decision(action="switch_topic", topic_index=idx)
+    return d
+
+
+def _history_text(messages: list, last_n: int | None = None) -> str:
+    """Format the ("role", text) history for prompts."""
+    msgs = messages[-last_n:] if last_n else messages
+    return "\n".join(f"{'候选人' if r == 'user' else '面试官'}: {t}" for r, t in msgs)
+
+
+def route_after_decision(state: InterviewState) -> str:
+    """Route the LLM decision: end -> wrap, otherwise speak."""
+    d = state.get("decision") or {}
+    return "wrap" if d.get("action") == "end" else "interviewer"
+
+
+def route_start(state: InterviewState) -> str:
+    """Hard wrap guardrails, checked before the LLM decision node runs."""
+    if state["round_count"] >= MAX_ROUNDS:
+        return "wrap"
+    if len(state["covered_topics"]) >= len(state["topics"]):
+        return "wrap"
+    return "decision"
+
+
+# ---------------- graph nodes ----------------
+
+def decision_node(state: InterviewState) -> dict:
+    """Decide the interviewer's next move (followup / switch_topic / end)."""
+    topics = state["topics"]
+    covered = state["covered_topics"]
+    llm = ChatDeepSeek(model="deepseek-chat", temperature=0).with_structured_output(
+        Decision
     )
-    verdict = llm.invoke(prompt).content.strip()
-    return {"followup_verdict": "followup" if verdict.startswith("追") else "review"}
-
-
-def followup_node(state: InterviewState) -> dict:
-    """Generate one deep-dive follow-up question on the weak spot of the answer."""
-    idx = state["question_index"]
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.1)
+    topic_list = "\n".join(f"{i}. {t}" for i, t in enumerate(topics, 1))
     prompt = (
-        "候选人的回答不够具体。基于问题和回答，生成一个深入追问，"
-        "只问一个点，不要重复原问题：\n\n"
-        f"问题：{DEMO_QUESTIONS[idx]}\n回答：{last_answer(state)}\n\n追问："
+        "你是面试导演，决定面试官下一步动作。\n"
+        "动作选项：\n"
+        "- followup：候选人刚回答的点值得深挖（回答过短、缺量化数据、回避核心、"
+        "或提到值得追问的技术细节）\n"
+        "- switch_topic：当前话题已聊透，切换到另一个未覆盖的话题\n"
+        "- end：所有话题基本覆盖、对话已充分，可以结束面试\n\n"
+        f"话题清单（编号. 话题名：考察说明）：\n{topic_list}\n\n"
+        f"已覆盖话题编号：{covered or '无'}\n"
+        f"当前话题编号：{state['current_topic'] or '无'}\n\n"
+        "规则：\n"
+        "1. 回答过短（少于 30 字）或缺量化数据时优先 followup\n"
+        "2. 同一话题最多追问 3 轮，之后必须换话题\n"
+        "3. 优先挑选未覆盖的话题；topic_index 用清单里的编号\n"
+        "4. 话题已基本覆盖时选 end\n\n"
+        f"对话历史：\n{_history_text(state['messages'])}\n\n"
+        "现在决定下一步。"
     )
-    followup = llm.invoke(prompt).content.strip()
+    try:
+        d = llm.invoke(prompt)
+        if not isinstance(d, Decision):
+            d = None
+    except Exception:
+        d = None
+    if d is None:
+        d = Decision(action="switch_topic")
+    d = _sanitize_decision(d, topics, covered)
+    return {"decision": d.model_dump()}
+
+
+def _ask_followup(topic_text: str, history: str) -> str:
+    """Generate one deep-dive follow-up question on the current topic."""
+    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.3)
+    prompt = (
+        "你是面试官，正在深挖当前话题。基于对话历史生成一个深入追问。\n"
+        "要求：只问一个点；聚焦量化数据、技术取舍或困难反思；不重复已问过的内容；\n"
+        "不要输出任何前缀或解释，直接输出问题。\n\n"
+        f"当前话题：{topic_text}\n\n"
+        f"最近对话：\n{history}\n\n追问："
+    )
+    return llm.invoke(prompt).content.strip()
+
+
+def _ask_topic_question(topic_text: str, history: str) -> str:
+    """Open a new topic with a natural transition question."""
+    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.3)
+    prompt = (
+        "你是面试官。把话题切换到新方向并提一个开场问题。\n"
+        "要求：可以用一句过渡（如「我们换个话题」），问题要具体、可展开；\n"
+        "不要输出任何前缀或解释，直接输出你要对候选人说的话。\n\n"
+        f"新话题：{topic_text}\n\n"
+        f"最近对话：\n{history}\n\n你要说的话："
+    )
+    return llm.invoke(prompt).content.strip()
+
+
+def interviewer_node(state: InterviewState) -> dict:
+    """Speak as the interviewer: ask a follow-up or open a new topic."""
+    d = state["decision"]
+    topics = state["topics"]
+    covered = state["covered_topics"]
+    history = _history_text(state["messages"], last_n=6)
+    if d["action"] == "switch_topic":
+        idx = _valid_topic_index(d.get("topic_index", 0), topics, covered)
+        if state["current_topic"] and state["current_topic"] not in covered:
+            covered = covered + [state["current_topic"]]
+        current_topic = idx
+        text = _ask_topic_question(topics[idx - 1], history)
+    else:  # followup
+        current_topic = state["current_topic"]
+        topic_text = topics[current_topic - 1] if current_topic else "自由话题"
+        text = _ask_followup(topic_text, history)
     return {
-        "output": f"\n追问：{followup}",
-        "followup_count": state.get("followup_count", 0) + 1,
+        "messages": [("assistant", text)],
+        "output": text,
+        "current_topic": current_topic,
+        "covered_topics": covered,
+        "round_count": state["round_count"] + 1,
     }
 
 
-def review_node(state: InterviewState) -> dict:
-    """Review the previous answer on 3 dimensions, or greet on the first round."""
-    idx = state["question_index"]
-    if not state["messages"]:
-        return {"output": GREETING}
-    answer = last_answer(state)
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.1)
-    prompt = (
-        "你是面试点评官。从三个维度点评候选人回答：\n"
-        "1. STAR 完整性（背景/任务/行动/结果是否完整）\n"
-        "2. 技术深度（是否有具体技术细节和数据）\n"
-        "3. 表达清晰度（结构是否清楚）\n\n"
-        f"候选人回答：{answer}\n\n"
-        "给出 3-5 句点评，并指出一个最值得改进的点。"
-    )
-    review = llm.invoke(prompt).content
-    verification = verify_answer(answer)
-    if verification and "无冲突" not in verification:
-        review += f"\n\n{verification}"
-    return {"output": review, "question_index": idx + 1, "followup_count": 0}
-
-
-def route_after_review(state: InterviewState) -> str:
-    if state["question_index"] >= len(DEMO_QUESTIONS):
-        return "wrap"
-    return "ask"
-
-
-def ask_node(state: InterviewState) -> dict:
-    idx = state["question_index"]
-    return {"output": f"\n第 {idx + 1} 题：{DEMO_QUESTIONS[idx]}"}
-
-
 def wrap_node(state: InterviewState) -> dict:
+    """Debrief: summary + evidence verification + report export via tool calling."""
     llm = ChatDeepSeek(model="deepseek-chat", temperature=0.1)
-    transcript = "\n".join(
-        f"Q{i + 1}: {DEMO_QUESTIONS[i]}\n"
-        f"A: {state['messages'][i] if i < len(state['messages']) else '(未回答)'}"
-        for i in range(len(DEMO_QUESTIONS))
-    )
+    transcript = _history_text(state["messages"])
     prompt = (
         "你是面试复盘助手。基于整场面试记录，输出：\n"
         "1. 整体表现总结（2-3 句）\n2. 最突出的 1 个优点\n3. 最需改进的 1 个问题\n\n"
         f"面试记录：\n{transcript}"
     )
     summary = llm.invoke(prompt).content
+    # Evidence verification runs once at the end (WBS 4.5). Only answers that
+    # carry hard numbers/metrics are worth checking; keep the batch small so
+    # the checker does not confuse "absent from the source" with "contradicts".
+    numeric_answers = [
+        t
+        for r, t in state["messages"]
+        if r == "user" and re.search(r"\d+(\.\d+)?\s*%?|\d+\s*FPS|mAP", t)
+    ]
+    verification = verify_answer(" ".join(numeric_answers))
+    if verification and "无冲突" not in verification:
+        summary += f"\n\n{verification}"
     # Tool calling: let the LLM decide to export the report via the tool
     llm_with_tools = llm.bind_tools([export_report])
     tool_msg = llm_with_tools.invoke(
@@ -248,63 +384,64 @@ def wrap_node(state: InterviewState) -> dict:
         result = export_report.invoke(call["args"])
         export_note = f"\n\n📄 {result}"
     return {
-        "output": "\n" + summary + export_note + "\n\n面试结束，感谢作答！"
+        "output": "\n" + summary + export_note + "\n\n面试结束，感谢作答！",
+        "finished": True,
     }
 
 
+# ---------------- graph & drivers ----------------
+
 def build_graph():
     graph = StateGraph(InterviewState)
-    graph.add_node("followup_check", followup_check)
-    graph.add_node("followup", followup_node)
-    graph.add_node("review", review_node)
-    graph.add_node("ask", ask_node)
+    graph.add_node("decision", decision_node)
+    graph.add_node("interviewer", interviewer_node)
     graph.add_node("wrap", wrap_node)
-    graph.add_edge(START, "followup_check")
     graph.add_conditional_edges(
-        "followup_check",
-        lambda s: s["followup_verdict"],
-        {"followup": "followup", "review": "review"},
+        START, route_start, {"decision": "decision", "wrap": "wrap"}
     )
-    graph.add_edge("followup", END)
     graph.add_conditional_edges(
-        "review", route_after_review, {"ask": "ask", "wrap": "wrap"}
+        "decision",
+        route_after_decision,
+        {"interviewer": "interviewer", "wrap": "wrap"},
     )
-    graph.add_edge("ask", END)
+    graph.add_edge("interviewer", END)
     graph.add_edge("wrap", END)
     return graph.compile()
 
 
-def run_interview():
-    jd_text = load_jd()
-    if jd_text:
-        questions = generate_questions(jd_text)
-        print(f"[i] 基于 JD 生成了 {len(questions)} 道面试题")
-        DEMO_QUESTIONS[:] = questions
-    graph = build_graph()
-    history = []
-    state = {
-        "messages": history,
-        "question_index": 0,
-        "followup_count": 0,
-        "followup_verdict": "",
+def init_state(topics: list | None = None) -> InterviewState:
+    """Fresh interview state. topics default to the fallback list."""
+    return {
+        "messages": [],
+        "topics": topics or DEFAULT_TOPICS,
+        "covered_topics": [],
+        "current_topic": 0,
+        "round_count": 0,
+        "decision": {},
         "output": "",
+        "finished": False,
     }
+
+
+def run_interview():
+    topics = prepare_topics()
+    print(f"[i] 话题锚点已就绪（{len(topics)} 个）")
+    graph = build_graph()
+    state = init_state(topics)
+    print("\n" + GREETING)
     while True:
-        result = graph.invoke(state)
-        print(result["output"])
-        if result["question_index"] >= len(DEMO_QUESTIONS):
-            break
         answer = input("\n你的回答：").strip()
         if answer.lower() in ("quit", "exit", "q"):
+            print("面试提前结束。")
             break
-        history.append(("user", answer))
-        state = {
-            "messages": history,
-            "question_index": result["question_index"],
-            "followup_count": result.get("followup_count", 0),
-            "followup_verdict": "",
-            "output": "",
-        }
+        state["messages"] = state["messages"] + [("user", answer)]
+        state["output"] = ""
+        state["decision"] = {}
+        result = graph.invoke(state)
+        state = dict(result)
+        print(state["output"])
+        if state["finished"]:
+            break
 
 
 if __name__ == "__main__":
