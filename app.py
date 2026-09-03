@@ -22,9 +22,9 @@ if sys.platform == 'win32':
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import models
 import retrieval
 
 EMBED_MODEL = 'BAAI/bge-small-zh-v1.5'
@@ -100,7 +100,7 @@ def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
 
 def main():
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
-    llm = ChatDeepSeek(model='deepseek-chat', temperature=0.1)
+    llm = models.get_chat_model(temperature=0.1)
 
     chunks = load_and_chunk()
     if not chunks:

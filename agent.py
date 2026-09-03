@@ -25,12 +25,12 @@ if sys.platform == "win32":
 
 from langchain_chroma import Chroma
 from langchain_core.tools import tool
-from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
 import app
+import models
 import retrieval
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -126,7 +126,7 @@ def verify_answer(answer: str) -> str:
     evidence = "\n\n".join(
         f"[{i}] {c.page_content}" for i, (c, _) in enumerate(ranked[:8], 1)
     )
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0)
+    llm = models.get_chat_model(temperature=0)
     prompt = (
         "你是事实核对员。对比候选人回答与简历/论文原文，只找与原文明确相反的硬事实"
         "（数字、指标、技术选型、模块名称）。\n"
@@ -184,7 +184,7 @@ def parse_topics(text: str) -> list:
 
 def generate_topics(jd_text: str, resume_text: str, n: int = 8) -> list:
     """Extract n interview topic anchors from JD + resume (WBS 4.2, v2)."""
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.3)
+    llm = models.get_chat_model(temperature=0.3)
     prompt = (
         "你是资深面试官。根据岗位 JD 和候选人简历/项目经历，抽取面试话题锚点。\n"
         "要求：\n"
@@ -284,7 +284,7 @@ def decision_node(state: InterviewState) -> dict:
     """Decide the interviewer's next move (followup / switch_topic / end)."""
     topics = state["topics"]
     covered = state["covered_topics"]
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0).with_structured_output(
+    llm = models.get_chat_model(temperature=0).with_structured_output(
         Decision
     )
     topic_list = "\n".join(f"{i}. {t}" for i, t in enumerate(topics, 1))
@@ -326,7 +326,7 @@ def decision_node(state: InterviewState) -> dict:
 
 def _ask_followup(topic_text: str, history: str) -> str:
     """Generate one deep-dive follow-up question on the current topic."""
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.3)
+    llm = models.get_chat_model(temperature=0.3)
     prompt = (
         "你是面试官，正在深挖当前话题。基于对话历史生成一个深入追问。\n"
         "要求：只问一个点；聚焦量化数据、技术取舍或困难反思；不重复已问过的内容；\n"
@@ -339,7 +339,7 @@ def _ask_followup(topic_text: str, history: str) -> str:
 
 def _ask_topic_question(topic_text: str, history: str) -> str:
     """Open a new topic with a natural transition question."""
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.3)
+    llm = models.get_chat_model(temperature=0.3)
     prompt = (
         "你是面试官。把话题切换到新方向并提一个开场问题。\n"
         "要求：可以用一句过渡（如「我们换个话题」），问题要具体、可展开；\n"
@@ -380,7 +380,7 @@ def interviewer_node(state: InterviewState) -> dict:
 
 def wrap_node(state: InterviewState) -> dict:
     """Debrief: summary + evidence verification + report export via tool calling."""
-    llm = ChatDeepSeek(model="deepseek-chat", temperature=0.1)
+    llm = models.get_chat_model(temperature=0.1)
     transcript = _history_text(state["messages"])
     prompt = (
         "你是面试复盘助手。基于整场面试记录，输出：\n"

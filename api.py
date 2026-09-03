@@ -15,11 +15,11 @@ if sys.platform == "win32":
 
 from fastapi import FastAPI, File, UploadFile
 from langchain_chroma import Chroma
-from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
 from pydantic import BaseModel
 
 import app
+import models
 import retrieval
 
 fastapi_app = FastAPI(title="Interview Mock RAG Agent API", version="0.1.0")
@@ -46,7 +46,7 @@ def get_pipeline():
         store,
         retrieval.BM25Index(chunks),
         retrieval.Reranker(),
-        ChatDeepSeek(model="deepseek-chat", temperature=0.1),
+        models.get_chat_model(temperature=0.1),
     )
     return _pipeline
 
