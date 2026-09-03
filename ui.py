@@ -14,10 +14,10 @@ API = "http://127.0.0.1:8000"
 st.set_page_config(page_title="面试官模拟 RAG Agent", layout="centered")
 st.title("🎯 面试官模拟 RAG Agent")
 
-tab_qa, tab_iv = st.tabs(["💬 知识库问答", "🎤 模拟面试"])
+page = st.sidebar.radio("模式切换", ["💬 知识库问答", "🎤 模拟面试"], key="page")
 
-# ---------------- Q&A tab (through FastAPI) ----------------
-with tab_qa:
+# ---------------- Q&A page (through FastAPI) ----------------
+if page == "💬 知识库问答":
     st.caption("回答带原文引用；检索不到相关内容会明确拒答，绝不编造。")
     with st.sidebar:
         st.header("📚 知识库上传")
@@ -41,8 +41,13 @@ with tab_qa:
     for m in st.session_state.qa_messages:
         with st.chat_message(m["role"]):
             st.write(m["content"])
-    question = st.chat_input("问点什么，例如：车辆计数误差控制在多少？", key="qa_input")
+    question = st.chat_input("问点什么，例如：车辆计数误差控制在多少？（输入「开始面试」切换面试模式）", key="qa_input")
     if question:
+        if "开始面试" in question:
+            # unified entry: switch to interview mode, interviewer asks, user answers
+            st.session_state.page = "🎤 模拟面试"
+            st.session_state.start_interview = True
+            st.rerun()
         st.session_state.qa_messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.write(question)
@@ -56,8 +61,8 @@ with tab_qa:
             st.write(answer)
         st.session_state.qa_messages.append({"role": "assistant", "content": answer})
 
-# ---------------- Mock interview tab (local LangGraph agent) ----------------
-with tab_iv:
+# ---------------- Mock interview page (local LangGraph agent) ----------------
+elif page == "🎤 模拟面试":
     st.caption(
         "AI 面试官：JD 定制出题 → 追问（最多 2 轮）→ 三维度点评 → "
         "证据核实（与简历矛盾点出）→ 复盘报告导出。首次启动需加载模型，请耐心等待。"
@@ -98,7 +103,7 @@ with tab_iv:
         it["state"] = dict(result)
         it["finished"] = result["question_index"] >= len(agent.DEMO_QUESTIONS)
 
-    if st.button("开始 / 重新开始面试"):
+    if st.button("开始 / 重新开始面试") or st.session_state.pop("start_interview", False):
         start_interview()
 
     it = st.session_state.get("interview")

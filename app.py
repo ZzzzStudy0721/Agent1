@@ -123,11 +123,17 @@ def main():
 
     reranker = retrieval.Reranker()
     print("Ask questions about your resume/projects (input 'quit' to exit).")
+    print("输入「开始面试」切换到面试官模式（AI 提问，你回答）。")
     while True:
         query = input("\nQ: ").strip()
         if query.lower() in ("quit", "exit", "q"):
             break
         if not query:
+            continue
+        if "开始面试" in query:
+            import agent  # lazy import to avoid circular dependency
+
+            agent.run_interview()
             continue
         answer = answer_question(query, vectorstore, bm25, reranker, llm)
         print(f"\nA: {answer}")
