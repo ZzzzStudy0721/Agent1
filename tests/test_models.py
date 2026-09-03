@@ -2,7 +2,6 @@
 
 Usage:
     python tests/test_models.py              # resolution checks only, no API call
-    CHAT_MODEL=claude-... python tests/test_models.py   # Claude branch check
 
 A live-call verification against a real vendor (Zhipu GLM, etc.) is a
 manual step: fill CHAT_MODEL / CHAT_BASE_URL / CHAT_API_KEY in .env and
@@ -18,7 +17,6 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-from langchain_anthropic import ChatAnthropic  # noqa: E402
 from langchain_deepseek import ChatDeepSeek  # noqa: E402
 from langchain_openai import ChatOpenAI  # noqa: E402
 
@@ -48,25 +46,8 @@ def test_openai_compatible_switch():
     _clean_env()
 
 
-def test_claude_branch_code_ready():
-    """Claude resolves through init_chat_model (code-ready, no key needed to
-    construct — a live call needs ANTHROPIC_API_KEY, unavailable in CN)."""
-    _clean_env()
-    os.environ["CHAT_MODEL"] = "claude-haiku-4-5-20251001"
-    llm = models.get_chat_model()
-    assert isinstance(llm, ChatAnthropic), f"expected ChatAnthropic, got {type(llm).__name__}"
-    print(f"[claude] {llm.model} instance OK (no call made)")
-    _clean_env()
-
-
 if __name__ == "__main__":
-    # read the switch before tests run: tests clean CHAT_* env themselves
-    wants_claude = os.environ.get("CHAT_MODEL", "").startswith("claude")
     test_default_is_deepseek()
     print("[deepseek] default factory resolves to ChatDeepSeek")
     test_openai_compatible_switch()
-    if wants_claude:
-        test_claude_branch_code_ready()
-    else:
-        print("[claude] skipped (set CHAT_MODEL=claude-... to check the branch)")
     print("\nModel factory test passed")

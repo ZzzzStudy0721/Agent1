@@ -4,11 +4,8 @@ Resolution order:
 1. CHAT_BASE_URL set -> ChatOpenAI against any OpenAI-compatible vendor
                         (Zhipu GLM / Qwen / Kimi / SiliconFlow ...);
                         CHAT_API_KEY carries the credential, CHAT_MODEL the name
-2. otherwise         -> langchain init_chat_model infers the provider from
-                        the model name:
-                        deepseek-chat -> ChatDeepSeek  (default)
-                        claude-...    -> ChatAnthropic (code-ready; needs an
-                        Anthropic key, unavailable in mainland China)
+2. otherwise         -> langchain init_chat_model resolves deepseek-chat to
+                        ChatDeepSeek (default)
 
 Examples (.env):
     # DeepSeek (default — nothing extra to set)
