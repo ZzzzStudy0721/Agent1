@@ -69,9 +69,9 @@ def chat(req: ChatRequest) -> ChatResponse:
 
 @fastapi_app.post("/upload")
 async def upload(file: UploadFile = File(...)) -> dict:
-    """Save an md/txt file into the knowledge base and rebuild the index."""
-    if not file.filename.endswith((".md", ".txt")):
-        return {"error": "only .md / .txt files are supported"}
+    """Save an md/txt/pdf file into the knowledge base and rebuild the index."""
+    if not file.filename.endswith((".md", ".txt", ".pdf")):
+        return {"error": "only .md / .txt / .pdf files are supported"}
     os.makedirs(app.DATA_DIR, exist_ok=True)
     path = os.path.join(app.DATA_DIR, os.path.basename(file.filename))
     content = await file.read()

@@ -21,8 +21,8 @@ if page == "💬 知识库问答":
     st.caption("回答带原文引用；检索不到相关内容会明确拒答，绝不编造。")
     with st.sidebar:
         st.header("📚 知识库上传")
-        st.caption("支持 md / txt；上传后自动重建索引，约 1 分钟。")
-        uploaded = st.file_uploader("选择文件", type=["md", "txt"])
+        st.caption("支持 md / txt / pdf（扫描版 PDF 无法提取文字）；上传后自动重建索引，约 1 分钟。")
+        uploaded = st.file_uploader("选择文件", type=["md", "txt", "pdf"])
         if uploaded is not None:
             with st.spinner("上传并重建索引中…"):
                 resp = requests.post(

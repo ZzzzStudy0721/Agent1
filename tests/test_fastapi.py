@@ -53,6 +53,40 @@ def test_upload_roundtrip():
     api._pipeline = None
 
 
+def test_upload_pdf():
+    """PDF upload: text extracted, indexed, and searchable."""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", size=12)
+    pdf.cell(text="This is a project PDF document with magic number 98765 for RAG indexing.")
+    pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_doc.pdf")
+    pdf.output(pdf_path)
+
+    client = TestClient(api.fastapi_app)
+    with open(pdf_path, "rb") as f:
+        resp = client.post("/upload", files={"file": ("test_doc.pdf", f.read())})
+    data = resp.json()
+    print(f"[upload pdf] {data}")
+    assert "saved" in data, f"pdf upload failed: {data}"
+    resp2 = client.post("/chat", json={"question": "PDF 文档里的 magic number 是多少？"})
+    print(f"[chat after pdf upload] {resp2.json()['answer'][:80]}")
+    assert "98765" in resp2.json()["answer"], "uploaded PDF content not searchable"
+    # cleanup
+    os.remove(os.path.join(api.app.DATA_DIR, "test_doc.pdf"))
+    os.remove(pdf_path)
+    api._pipeline = None
+
+
+if __name__ == "__main__":
+    test_chat_in_scope()
+    test_chat_refused()
+    test_upload_roundtrip()
+    test_upload_pdf()
+    print("\nFastAPI test passed")
+
+
 if __name__ == "__main__":
     test_chat_in_scope()
     test_chat_refused()

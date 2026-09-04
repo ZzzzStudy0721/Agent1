@@ -43,14 +43,26 @@ REFUSAL = '知识库中没有相关信息，无法回答。'
 
 
 def load_and_chunk(data_dir: str = DATA_DIR) -> list:
-    """Load all md/txt files under data/ and split into overlapping chunks."""
+    """Load all md/txt/pdf files under data/ and split into overlapping chunks."""
     splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks = []
     for name in sorted(os.listdir(data_dir)):
+        path = os.path.join(data_dir, name)
         if name.endswith(('.md', '.txt')):
-            with open(os.path.join(data_dir, name), encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 doc = Document(page_content=f.read(), metadata={'source': name})
-            chunks.extend(splitter.split_documents([doc]))
+        elif name.endswith('.pdf'):
+            from pypdf import PdfReader
+
+            reader = PdfReader(path)
+            text = '\n'.join((page.extract_text() or '') for page in reader.pages)
+            if not text.strip():
+                print(f'[warn] {name}: no text extracted (scanned PDF?), skipped')
+                continue
+            doc = Document(page_content=text, metadata={'source': name})
+        else:
+            continue
+        chunks.extend(splitter.split_documents([doc]))
     return chunks
 
 
