@@ -83,6 +83,7 @@ def generate(query: str, context_docs: list, llm) -> str:
     numbered = '\n\n'.join(f'[{i}] {d.page_content}' for i, d in enumerate(context_docs, 1))
     system = (
         '你是面试辅导助手。只根据参考资料回答问题,引用处标注编号如[1]。'
+        '回答简洁,直给结论和关键数据,控制在 150 字以内。'
         '如果参考资料与问题不相关,直接回答:"知识库中没有相关信息,无法回答。"'
         '禁止编造资料中没有的内容。'
     )
@@ -90,7 +91,9 @@ def generate(query: str, context_docs: list, llm) -> str:
         ('system', system),
         ('human', f'问题: {query}\n\n参考资料:\n{numbered}'),
     ]
-    return llm.invoke(messages).content
+    # max_tokens caps long-winded answers: LLM generation is the biggest latency
+    # slice (6-7.5s), and short answers are also better for interview demos
+    return llm.invoke(messages, max_tokens=350).content
 
 
 def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
