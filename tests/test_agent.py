@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent
+import pytest
+
+pytestmark = pytest.mark.live  # real LLM calls end to end
 
 ANSWER_POOL = [
     "我是物联网工程专业的应届生，毕设做的是基于 YOLOv8 和 DeepSORT 的交通视频车辆检测与计数系统。",

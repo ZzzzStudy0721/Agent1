@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent
+import pytest
 
 TOPICS = ["话题A：说明A", "话题B：说明B", "话题C：说明C"]
 
@@ -94,6 +95,7 @@ def test_route_after_decision():
     assert agent.route_after_decision(s) == "interviewer"
 
 
+@pytest.mark.live
 def test_live_short_answer_round():
     # one live round: short answer, graph must return one question and stay open
     graph = agent.build_graph()

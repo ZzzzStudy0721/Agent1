@@ -15,6 +15,9 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 from fastapi.testclient import TestClient
 
 import api
+import pytest
+
+pytestmark = pytest.mark.live  # needs the retrieval pipeline + LLM
 
 
 def test_chat_in_scope():

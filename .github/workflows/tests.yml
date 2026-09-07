@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      # Live tests (real LLM calls) are skipped automatically by tests/conftest.py
+      # when DEEPSEEK_API_KEY is not set. Add it as a repo secret to run them here;
+      # note they also download embedding models (~100MB) on first run.
+      - name: Run tests
+        run: pytest tests/ -v
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

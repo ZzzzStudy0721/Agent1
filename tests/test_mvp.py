@@ -16,6 +16,9 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_huggingface import HuggingFaceEmbeddings
 
 import app
+import pytest
+
+pytestmark = pytest.mark.live  # needs the retrieval pipeline + LLM
 
 
 def test_end_to_end():

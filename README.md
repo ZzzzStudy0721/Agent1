@@ -78,9 +78,7 @@ START → 护栏检查（轮数≥20 或话题全覆盖？）──是──→ 
 ### 1. 安装依赖
 
 ```bash
-pip install langchain langchain-deepseek langchain-huggingface langchain-chroma \
-    langchain-text-splitters langgraph chromadb sentence-transformers \
-    rank-bm25 jieba fastapi uvicorn streamlit python-dotenv
+pip install -r requirements.txt
 ```
 
 ### 2. 配置
@@ -120,18 +118,12 @@ streamlit run ui.py
 ### 5. 测试
 
 ```bash
-python tests/test_api.py          # DeepSeek API 冒烟
-python tests/test_mvp.py          # RAG 端到端
-python tests/eval_retrieval.py    # 四模式消融评估
-python tests/test_guardrail.py    # 拒答硬约束（含口语问法）
-python tests/test_agent.py        # 面试全流程（自由对话）
-python tests/test_followup.py     # 决策路由与护栏
-python tests/test_topics.py       # 话题锚点抽取
-python tests/test_evidence.py     # 证据核实
-python tests/test_tool.py         # Tool Calling
-python tests/test_fastapi.py      # FastAPI 接口
-python tests/test_models.py       # 模型工厂多后端解析
+pytest tests/                     # 一键全跑；无 DEEPSEEK_API_KEY 时自动跳过 live 测试
+pytest tests/ -m "not live"       # 只跑不依赖 API key 的纯逻辑测试
+python tests/eval_retrieval.py    # 四模式消融评估（单独跑）
 ```
+
+CI：`.github/workflows/tests.yml`，push 后 GitHub Actions 自动跑（无 key 跑纯逻辑套件，配 `DEEPSEEK_API_KEY` secret 后连 live 测试一起跑）。
 
 ## 项目结构
 

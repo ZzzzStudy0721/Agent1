@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent
+import pytest
+
+pytestmark = pytest.mark.live  # needs the retrieval pipeline + LLM
 
 FABRICATED = (
     "我毕设的检测模型 mAP@0.5 达到了 99.9%，精确率 98.5%，"

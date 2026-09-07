@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent
+import pytest
 
 
 def test_parse_topics():
@@ -31,6 +32,7 @@ def test_parse_topics():
     assert "*" not in topics[2], f"markdown bold not stripped: {topics[2]!r}"
 
 
+@pytest.mark.live
 def test_generate_from_jd_and_resume():
     jd_text = agent.load_jd()
     assert jd_text, "no JD file found under data/"
