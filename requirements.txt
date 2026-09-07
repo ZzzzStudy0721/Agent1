@@ -14,6 +14,7 @@ uvicorn
 streamlit
 python-dotenv
 pydantic
+pydantic-settings
 pytest
 langfuse
 fpdf

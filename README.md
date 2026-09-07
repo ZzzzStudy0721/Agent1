@@ -85,7 +85,7 @@ pip install -r requirements.txt
 
 ### 2. 配置
 
-复制 `.env` 并填入 DeepSeek API Key（模型走 hf-mirror 国内镜像，默认已配置）：
+复制 `.env` 并填入 DeepSeek API Key（模型走 hf-mirror 国内镜像，默认已配置）。模型层配置集中在 `settings.py`（pydantic-settings），缺 key 会在第一次 LLM 调用时报清晰错误而非静默失败：
 
 ```
 DEEPSEEK_API_KEY=sk-xxx
@@ -142,6 +142,7 @@ CI：`.github/workflows/tests.yml`，push 后 GitHub Actions 自动跑（无 key
 ├── retrieval.py      # BM25 索引、RRF 融合、CrossEncoder 重排
 ├── agent.py          # LangGraph 面试状态机 + LLM 决策路由 + 话题锚点 + 证据核实 + Tool
 ├── models.py         # 模型工厂：DeepSeek / OpenAI 兼容（GLM 等），env 切换
+├── settings.py       # pydantic-settings 集中配置，缺 key 启动即报错
 ├── api.py            # FastAPI 服务层（/chat SSE 流式、/upload）
 ├── ui.py             # Streamlit 界面（问答 + 模拟面试）
 ├── data/             # 知识库（gitignore）

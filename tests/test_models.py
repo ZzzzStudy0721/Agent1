@@ -28,8 +28,38 @@ def _clean_env():
         os.environ.pop(k, None)
 
 
+def test_validate_settings():
+    from settings import Settings
+
+    # isolate: empty strings fall back to os.environ in pydantic-settings,
+    # so remove the real keys from the environment for this test
+    saved = {
+        k: os.environ.pop(k, None)
+        for k in ("DEEPSEEK_API_KEY", "CHAT_BASE_URL", "CHAT_API_KEY")
+    }
+    try:
+        # no key at all -> clear error naming the missing key
+        s = Settings(_env_file=None, chat_model="deepseek-chat")
+        assert "DEEPSEEK_API_KEY" in models.validate_settings(s)
+        # deepseek key present -> OK
+        s = Settings(_env_file=None, chat_model="deepseek-chat", deepseek_api_key="sk-x")
+        assert models.validate_settings(s) is None
+        # OpenAI-compatible endpoint without its key -> clear error
+        s = Settings(_env_file=None, chat_base_url="https://x.example")
+        assert "CHAT_API_KEY" in models.validate_settings(s)
+        # OpenAI-compatible endpoint with key -> OK
+        s = Settings(_env_file=None, chat_base_url="https://x.example", chat_api_key="sk-y")
+        assert models.validate_settings(s) is None
+    finally:
+        for k, v in saved.items():
+            if v:
+                os.environ[k] = v
+    print("[validate] missing-key errors are clear and specific")
+
+
 def test_callbacks_disabled_without_langfuse_key():
     _clean_env()
+    os.environ["LANGFUSE_PUBLIC_KEY"] = ""  # neutralize a .env-configured key
     assert models.get_callbacks() == [], "no Langfuse key -> no callbacks"
 
 
@@ -45,6 +75,9 @@ def test_callbacks_enabled_with_langfuse_key():
 
 def test_default_is_deepseek():
     _clean_env()
+    # override whatever .env configures (GLM etc.) so the default branch runs
+    os.environ["CHAT_MODEL"] = "deepseek-chat"
+    os.environ["CHAT_BASE_URL"] = ""
     llm = models.get_chat_model()
     assert isinstance(llm, ChatDeepSeek), f"expected ChatDeepSeek, got {type(llm).__name__}"
 
@@ -65,6 +98,7 @@ if __name__ == "__main__":
     test_default_is_deepseek()
     print("[deepseek] default factory resolves to ChatDeepSeek")
     test_openai_compatible_switch()
+    test_validate_settings()
     test_callbacks_disabled_without_langfuse_key()
     test_callbacks_enabled_with_langfuse_key()
     print("\nModel factory test passed")
