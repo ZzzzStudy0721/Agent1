@@ -9,6 +9,7 @@ conversation from drifting (WBS 4.2/4.4).
 
 Graph: START -> guardrails -> (decision -> (interviewer | wrap) | wrap) -> END
 """
+import logging
 import operator
 import os
 import re
@@ -35,6 +36,8 @@ import retrieval
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+
+logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 20  # hard cap on interviewer turns (guardrail)
 MAX_FOLLOWUPS = 3  # hard cap on follow-up rounds per topic (guardrail)
@@ -218,7 +221,7 @@ def prepare_topics(n: int = 8) -> list:
         try:
             return generate_topics(jd_text or "", resume_text or "", n)
         except Exception as e:
-            print(f"[warn] topic extraction failed ({e}), falling back to defaults")
+            logger.warning("topic extraction failed (%s), falling back to defaults", e)
     return DEFAULT_TOPICS[:n]
 
 
@@ -324,6 +327,10 @@ def decision_node(state: InterviewState) -> dict:
         current_topic=state["current_topic"],
         topic_rounds=state["topic_round_count"],
     )
+    logger.info(
+        "decision: %s topic=%d round=%d covered=%s",
+        d.action, d.topic_index, state["round_count"], covered,
+    )
     return {"decision": d.model_dump()}
 
 
@@ -403,7 +410,7 @@ def wrap_node(state: InterviewState) -> dict:
     try:
         verification = verify_answer(" ".join(numeric_answers))
     except Exception as e:
-        print(f"[warn] evidence verification failed ({e}), skipping")
+        logger.warning("evidence verification failed (%s), skipping", e)
     if verification and "无冲突" not in verification:
         summary += f"\n\n{verification}"
     # Tool calling: let the LLM decide to export the report via the tool
@@ -457,8 +464,11 @@ def init_state(topics: list | None = None) -> InterviewState:
 
 
 def run_interview():
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     topics = prepare_topics()
-    print(f"[i] 话题锚点已就绪（{len(topics)} 个）")
+    logger.info("topic anchors ready: %d", len(topics))
     graph = build_graph()
     state = init_state(topics)
     print("\n面试官：" + GREETING)
@@ -474,7 +484,8 @@ def run_interview():
             result = graph.invoke(state)
         except Exception as e:
             state["messages"] = state["messages"][:-1]
-            print(f"\n[!] 面试官暂时开小差了（LLM 调用失败：{e}），请重新回答一次。")
+            logger.error("graph invoke failed: %s", e)
+            print("\n[!] 面试官暂时开小差了（LLM 调用失败），请重新回答一次。")
             continue
         state = dict(result)
         if state["output"]:

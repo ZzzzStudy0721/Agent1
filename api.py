@@ -2,6 +2,7 @@
 
 Run: uvicorn api:fastapi_app --host 127.0.0.1 --port 8000
 """
+import logging
 import os
 import sys
 
@@ -23,6 +24,8 @@ import models
 import retrieval
 
 fastapi_app = FastAPI(title="Interview Mock RAG Agent API", version="0.1.0")
+
+logger = logging.getLogger(__name__)
 
 _pipeline = None  # lazy-loaded (vectorstore, bm25, reranker, llm)
 
@@ -66,7 +69,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         store, bm25, reranker, llm = get_pipeline()
         answer = app.answer_question(req.question, store, bm25, reranker, llm)
     except Exception as e:
-        print(f"[error] /chat failed: {e}")
+        logger.exception("chat failed: %s", e)
         raise HTTPException(status_code=503, detail="LLM 服务暂时不可用，请稍后重试") from e
     return ChatResponse(answer=answer, refused=(answer == app.REFUSAL))
 
@@ -96,4 +99,5 @@ async def upload(file: UploadFile = File(...)) -> dict:
     except Exception:
         pass
     app.build_vectorstore(chunks, embeddings, collection_name=app.COLLECTION)
+    logger.info("uploaded %s, index rebuilt (%d chunks)", file.filename, len(chunks))
     return {"saved": file.filename, "chunks": len(chunks)}

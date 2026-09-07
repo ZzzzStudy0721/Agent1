@@ -4,8 +4,10 @@ Standalone functions (load_and_chunk / retrieve / generate) so that M3 can
 mount them as LangGraph nodes without rewriting.
 """
 
+import logging
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -41,6 +43,8 @@ COLLECTION = 'kb_full'
 VECTOR_THRESHOLD = 0.2
 REFUSAL = '知识库中没有相关信息，无法回答。'
 
+logger = logging.getLogger(__name__)
+
 
 def load_and_chunk(data_dir: str = DATA_DIR) -> list:
     """Load all md/txt/pdf files under data/ and split into overlapping chunks."""
@@ -57,7 +61,7 @@ def load_and_chunk(data_dir: str = DATA_DIR) -> list:
             reader = PdfReader(path)
             text = '\n'.join((page.extract_text() or '') for page in reader.pages)
             if not text.strip():
-                print(f'[warn] {name}: no text extracted (scanned PDF?), skipped')
+                logger.warning(f'{name}: no text extracted (scanned PDF?), skipped')
                 continue
             doc = Document(page_content=text, metadata={'source': name})
         else:
@@ -93,7 +97,10 @@ def generate(query: str, context_docs: list, llm) -> str:
     ]
     # max_tokens caps long-winded answers: LLM generation is the biggest latency
     # slice (6-7.5s), and short answers are also better for interview demos
-    return llm.invoke(messages, max_tokens=350).content
+    start = time.perf_counter()
+    answer = llm.invoke(messages, max_tokens=350).content
+    logger.info("LLM answer for %r: %.2fs", query[:30], time.perf_counter() - start)
+    return answer
 
 
 def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
@@ -102,18 +109,29 @@ def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
     Refusal gate uses the Chinese embedding's similarity score, which stays
     robust on colloquial questions (unlike the English-pretrained reranker).
     """
+    start = time.perf_counter()
     top_vec = vectorstore.similarity_search_with_relevance_scores(query, k=1)
     if not top_vec or top_vec[0][1] < VECTOR_THRESHOLD:
+        logger.info(
+            "refused %r (gate %.3f)", query[:30], top_vec[0][1] if top_vec else -1
+        )
         return REFUSAL
     v = vectorstore.similarity_search(query, k=retrieval.CANDIDATE_K)
     b = bm25.search(query, top_k=retrieval.CANDIDATE_K)
     fused = retrieval.rrf_fusion(v, b, top_k=retrieval.CANDIDATE_K)
     ranked = reranker.rerank_with_scores(query, fused)
     docs = [c for c, _ in ranked[:top_k]]
+    logger.info(
+        "hybrid retrieval for %r: %.2fs (gate %.3f)",
+        query[:30], time.perf_counter() - start, top_vec[0][1],
+    )
     return generate(query, docs, llm)
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
     llm = models.get_chat_model(temperature=0.1)
 
@@ -127,10 +145,10 @@ def main():
         vectorstore = Chroma(
             embedding_function=embeddings, persist_directory=DB_DIR, collection_name=COLLECTION
         )
-        print(f'[i] Loaded existing vector store ({DB_DIR})')
+        logger.info(f'Loaded existing vector store ({DB_DIR})')
     else:
         vectorstore = build_vectorstore(chunks, embeddings, collection_name=COLLECTION)
-        print(f'[i] {len(chunks)} chunks indexed, vector store persisted to {DB_DIR}')
+        logger.info(f'{len(chunks)} chunks indexed, vector store persisted to {DB_DIR}')
 
     reranker = retrieval.Reranker()
     print("Ask questions about your resume/projects (input 'quit' to exit).")
@@ -149,7 +167,7 @@ def main():
         try:
             answer = answer_question(query, vectorstore, bm25, reranker, llm)
         except Exception as e:
-            print(f'[!] LLM call failed: {e}')
+            logger.error('LLM call failed: %s', e)
             answer = '[!] 回答生成失败（LLM 调用异常），请稍后重试'
         print(f'\nA: {answer}')
 
