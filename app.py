@@ -146,7 +146,11 @@ def main():
 
             agent.run_interview()
             continue
-        answer = answer_question(query, vectorstore, bm25, reranker, llm)
+        try:
+            answer = answer_question(query, vectorstore, bm25, reranker, llm)
+        except Exception as e:
+            print(f'[!] LLM call failed: {e}')
+            answer = '[!] 回答生成失败（LLM 调用异常），请稍后重试'
         print(f'\nA: {answer}')
 
 

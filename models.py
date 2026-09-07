@@ -31,7 +31,11 @@ DEFAULT_MODEL = "deepseek-chat"
 
 
 def get_chat_model(temperature: float = 0.1) -> BaseChatModel:
-    """Instantiate the chat model selected by CHAT_MODEL / CHAT_BASE_URL."""
+    """Instantiate the chat model selected by CHAT_MODEL / CHAT_BASE_URL.
+
+    All backends share max_retries + timeout so transient API failures retry
+    silently instead of crashing the caller.
+    """
     model = os.environ.get("CHAT_MODEL", DEFAULT_MODEL)
     base_url = os.environ.get("CHAT_BASE_URL")
     if base_url:
@@ -39,6 +43,11 @@ def get_chat_model(temperature: float = 0.1) -> BaseChatModel:
         if not api_key:
             raise ValueError("CHAT_BASE_URL is set, so CHAT_API_KEY must be set too")
         return ChatOpenAI(
-            model=model, base_url=base_url, api_key=api_key, temperature=temperature
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            temperature=temperature,
+            max_retries=2,
+            timeout=120,
         )
-    return init_chat_model(model, temperature=temperature)
+    return init_chat_model(model, temperature=temperature, max_retries=2, timeout=120)

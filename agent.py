@@ -215,7 +215,10 @@ def prepare_topics(n: int = 8) -> list:
     jd_text = load_jd()
     resume_text = load_resume()
     if jd_text or resume_text:
-        return generate_topics(jd_text or "", resume_text or "", n)
+        try:
+            return generate_topics(jd_text or "", resume_text or "", n)
+        except Exception as e:
+            print(f"[warn] topic extraction failed ({e}), falling back to defaults")
     return DEFAULT_TOPICS[:n]
 
 
@@ -396,7 +399,11 @@ def wrap_node(state: InterviewState) -> dict:
         for r, t in state["messages"]
         if r == "user" and re.search(r"\d+(\.\d+)?\s*%?|\d+\s*FPS|mAP", t)
     ]
-    verification = verify_answer(" ".join(numeric_answers))
+    verification = ""
+    try:
+        verification = verify_answer(" ".join(numeric_answers))
+    except Exception as e:
+        print(f"[warn] evidence verification failed ({e}), skipping")
     if verification and "无冲突" not in verification:
         summary += f"\n\n{verification}"
     # Tool calling: let the LLM decide to export the report via the tool
@@ -463,7 +470,12 @@ def run_interview():
         state["messages"] = state["messages"] + [("user", answer)]
         state["output"] = ""
         state["decision"] = {}
-        result = graph.invoke(state)
+        try:
+            result = graph.invoke(state)
+        except Exception as e:
+            state["messages"] = state["messages"][:-1]
+            print(f"\n[!] 面试官暂时开小差了（LLM 调用失败：{e}），请重新回答一次。")
+            continue
         state = dict(result)
         if state["output"]:
             print("\n面试官：" + state["output"])

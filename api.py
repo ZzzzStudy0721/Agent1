@@ -13,7 +13,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from pydantic import BaseModel
@@ -62,8 +62,12 @@ class ChatResponse(BaseModel):
 
 @fastapi_app.post("/chat")
 def chat(req: ChatRequest) -> ChatResponse:
-    store, bm25, reranker, llm = get_pipeline()
-    answer = app.answer_question(req.question, store, bm25, reranker, llm)
+    try:
+        store, bm25, reranker, llm = get_pipeline()
+        answer = app.answer_question(req.question, store, bm25, reranker, llm)
+    except Exception as e:
+        print(f"[error] /chat failed: {e}")
+        raise HTTPException(status_code=503, detail="LLM 服务暂时不可用，请稍后重试") from e
     return ChatResponse(answer=answer, refused=(answer == app.REFUSAL))
 
 
