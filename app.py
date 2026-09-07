@@ -82,8 +82,8 @@ def retrieve(query: str, vectorstore: Chroma, top_k: int = TOP_K) -> list:
     return vectorstore.similarity_search(query, k=top_k)
 
 
-def generate(query: str, context_docs: list, llm) -> str:
-    """Generate an answer with inline citations; refuse when context is irrelevant."""
+def _build_messages(query: str, context_docs: list) -> list:
+    """Build the prompt messages for answer generation (shared by streaming/non)."""
     numbered = '\n\n'.join(f'[{i}] {d.page_content}' for i, d in enumerate(context_docs, 1))
     system = (
         '你是面试辅导助手。只根据参考资料回答问题,引用处标注编号如[1]。'
@@ -91,20 +91,31 @@ def generate(query: str, context_docs: list, llm) -> str:
         '如果参考资料与问题不相关,直接回答:"知识库中没有相关信息,无法回答。"'
         '禁止编造资料中没有的内容。'
     )
-    messages = [
+    return [
         ('system', system),
         ('human', f'问题: {query}\n\n参考资料:\n{numbered}'),
     ]
+
+
+def generate(query: str, context_docs: list, llm) -> str:
+    """Generate an answer with inline citations (non-streaming)."""
     # max_tokens caps long-winded answers: LLM generation is the biggest latency
     # slice (6-7.5s), and short answers are also better for interview demos
     start = time.perf_counter()
-    answer = llm.invoke(messages, max_tokens=350).content
+    answer = llm.invoke(_build_messages(query, context_docs), max_tokens=350).content
     logger.info("LLM answer for %r: %.2fs", query[:30], time.perf_counter() - start)
     return answer
 
 
-def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
-    """Hybrid retrieval + rerank with refusal guardrail (M2 pipeline).
+def stream_answer(query: str, context_docs: list, llm):
+    """Yield answer chunks as they are generated (SSE-friendly)."""
+    for chunk in llm.stream(_build_messages(query, context_docs), max_tokens=350):
+        if chunk.content:
+            yield chunk.content
+
+
+def retrieve_or_refuse(query, vectorstore, bm25, reranker, top_k=TOP_K):
+    """Run the refusal gate + hybrid retrieval; returns (refused: bool, docs: list).
 
     Refusal gate uses the Chinese embedding's similarity score, which stays
     robust on colloquial questions (unlike the English-pretrained reranker).
@@ -115,7 +126,7 @@ def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
         logger.info(
             "refused %r (gate %.3f)", query[:30], top_vec[0][1] if top_vec else -1
         )
-        return REFUSAL
+        return True, []
     v = vectorstore.similarity_search(query, k=retrieval.CANDIDATE_K)
     b = bm25.search(query, top_k=retrieval.CANDIDATE_K)
     fused = retrieval.rrf_fusion(v, b, top_k=retrieval.CANDIDATE_K)
@@ -125,6 +136,14 @@ def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
         "hybrid retrieval for %r: %.2fs (gate %.3f)",
         query[:30], time.perf_counter() - start, top_vec[0][1],
     )
+    return False, docs
+
+
+def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
+    """Hybrid retrieval + rerank with refusal guardrail (non-streaming, M2 pipeline)."""
+    refused, docs = retrieve_or_refuse(query, vectorstore, bm25, reranker, top_k)
+    if refused:
+        return REFUSAL
     return generate(query, docs, llm)
 
 

@@ -2,6 +2,8 @@
 
 Run: uvicorn api:fastapi_app --host 127.0.0.1 --port 8000
 """
+import asyncio
+import json
 import logging
 import os
 import sys
@@ -15,6 +17,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from pydantic import BaseModel
@@ -58,20 +61,45 @@ class ChatRequest(BaseModel):
     question: str
 
 
-class ChatResponse(BaseModel):
-    answer: str
-    refused: bool
+def _sse(payload: dict) -> str:
+    """Format one server-sent event."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @fastapi_app.post("/chat")
-def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest) -> StreamingResponse:
+    """Stream the answer over SSE.
+
+    Pipeline init and local-model retrieval are CPU-bound, so they run in a
+    thread (asyncio.to_thread) and never block the event loop; the sync LLM
+    stream generator is iterated by Starlette's threadpool the same way.
+    """
     try:
-        store, bm25, reranker, llm = get_pipeline()
-        answer = app.answer_question(req.question, store, bm25, reranker, llm)
+        store, bm25, reranker, llm = await asyncio.to_thread(get_pipeline)
     except Exception as e:
-        logger.exception("chat failed: %s", e)
-        raise HTTPException(status_code=503, detail="LLM 服务暂时不可用，请稍后重试") from e
-    return ChatResponse(answer=answer, refused=(answer == app.REFUSAL))
+        logger.exception("pipeline init failed: %s", e)
+        raise HTTPException(status_code=503, detail="知识库初始化失败，请稍后重试") from e
+    try:
+        refused, docs = await asyncio.to_thread(
+            app.retrieve_or_refuse, req.question, store, bm25, reranker
+        )
+    except Exception as e:
+        logger.exception("retrieval failed: %s", e)
+        raise HTTPException(status_code=503, detail="检索失败，请稍后重试") from e
+
+    def sse_answer():
+        if refused:
+            yield _sse({"answer": app.REFUSAL, "refused": True})
+            return
+        try:
+            for chunk in app.stream_answer(req.question, docs, llm):
+                yield _sse({"chunk": chunk})
+            yield _sse({"done": True})
+        except Exception as e:
+            logger.exception("LLM stream failed: %s", e)
+            yield _sse({"error": "LLM 调用失败，请稍后重试"})
+
+    return StreamingResponse(sse_answer(), media_type="text/event-stream")
 
 
 @fastapi_app.post("/upload")

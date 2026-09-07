@@ -12,6 +12,7 @@
 
 - **混合检索**：BM25 关键词召回 + 向量语义召回，RRF（k=60）融合排序
 - **重排精排**：本地 CrossEncoder（bge-reranker-base）对候选精排
+- **流式输出 + 异步服务**：`/chat` 走 SSE 边生成边返回；端点异步 + 检索放线程池（asyncio.to_thread），事件循环不阻塞
 - **引用溯源 + 无出处拒答**：检索层向量相似度门限（0.2）硬约束，搜不到相关内容直接拒答，LLM 无编造空间
 - **自由对话式面试官**：无固定题单，面试官即兴提问 + 深入追问，最接近真人面试
 - **LLM 决策路由**：每轮由 LLM 结构化决策（深挖追问 / 切换话题 / 结束面试），LangGraph 状态机保证流程可控
@@ -132,7 +133,7 @@ CI：`.github/workflows/tests.yml`，push 后 GitHub Actions 自动跑（无 key
 ├── retrieval.py      # BM25 索引、RRF 融合、CrossEncoder 重排
 ├── agent.py          # LangGraph 面试状态机 + LLM 决策路由 + 话题锚点 + 证据核实 + Tool
 ├── models.py         # 模型工厂：DeepSeek / OpenAI 兼容（GLM 等），env 切换
-├── api.py            # FastAPI 服务层（/chat、/upload）
+├── api.py            # FastAPI 服务层（/chat SSE 流式、/upload）
 ├── ui.py             # Streamlit 界面（问答 + 模拟面试）
 ├── data/             # 知识库（gitignore）
 ├── tests/            # 9 个测试脚本 + 23 题测试集

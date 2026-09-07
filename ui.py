@@ -4,6 +4,8 @@ Run in two terminals:
   1. uvicorn api:fastapi_app --host 127.0.0.1 --port 8000
   2. streamlit run ui.py
 """
+import json
+
 import requests
 import streamlit as st
 
@@ -13,6 +15,33 @@ API = "http://127.0.0.1:8000"
 
 st.set_page_config(page_title="面试官模拟 RAG Agent", layout="centered")
 st.title("🎯 面试官模拟 RAG Agent")
+
+
+def _iter_sse(resp):
+    """Yield text chunks from an SSE response body."""
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        d = json.loads(line[6:])
+        if "chunk" in d:
+            yield d["chunk"]
+        elif "answer" in d:
+            yield d["answer"]
+        elif "error" in d:
+            yield f"⚠️ {d['error']}"
+
+
+def stream_qa(question):
+    """POST /chat and render the SSE stream; returns the assembled answer."""
+    try:
+        with requests.post(
+            f"{API}/chat", json={"question": question}, timeout=180, stream=True
+        ) as resp:
+            if resp.status_code != 200:
+                return f"⚠️ {resp.json().get('detail', '接口返回异常')}"
+            return st.write_stream(_iter_sse(resp))
+    except Exception as e:
+        return f"⚠️ 无法连接后端（先启动 uvicorn？）：{e}"
 
 page = st.sidebar.radio("模式切换", ["💬 知识库问答", "🎤 模拟面试"], key="page")
 
@@ -53,12 +82,7 @@ if page == "💬 知识库问答":
             st.write(question)
         with st.chat_message("assistant"):
             with st.spinner("检索中…"):
-                try:
-                    resp = requests.post(f"{API}/chat", json={"question": question}, timeout=180)
-                    answer = resp.json().get("answer", "接口返回异常")
-                except Exception as e:
-                    answer = f"⚠️ 无法连接后端（先启动 uvicorn？）：{e}"
-            st.write(answer)
+                answer = stream_qa(question)
         st.session_state.qa_messages.append({"role": "assistant", "content": answer})
 
 # ---------------- Mock interview page (local LangGraph agent) ----------------
