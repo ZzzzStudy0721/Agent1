@@ -13,6 +13,7 @@
 - **混合检索**：BM25 关键词召回 + 向量语义召回，RRF（k=60）融合排序
 - **重排精排**：本地 CrossEncoder（bge-reranker-base）对候选精排
 - **流式输出 + 异步服务**：`/chat` 走 SSE 边生成边返回；端点异步 + 检索放线程池（asyncio.to_thread），事件循环不阻塞
+- **Langfuse 追踪**：配置 key 后所有 LLM 调用自动上报 trace（token 成本、延迟）；未配置零开销
 - **引用溯源 + 无出处拒答**：检索层向量相似度门限（0.2）硬约束，搜不到相关内容直接拒答，LLM 无编造空间
 - **自由对话式面试官**：无固定题单，面试官即兴提问 + 深入追问，最接近真人面试
 - **LLM 决策路由**：每轮由 LLM 结构化决策（深挖追问 / 切换话题 / 结束面试），LangGraph 状态机保证流程可控
@@ -89,6 +90,14 @@ pip install -r requirements.txt
 ```
 DEEPSEEK_API_KEY=sk-xxx
 HF_ENDPOINT=https://hf-mirror.com
+```
+
+可选：Langfuse 追踪（langfuse.com 免费注册，填三个变量即自动启用，留空则零开销）：
+
+```
+LANGFUSE_PUBLIC_KEY=pk-lf-xxx
+LANGFUSE_SECRET_KEY=sk-lf-xxx
+LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 ### 3. 准备知识库

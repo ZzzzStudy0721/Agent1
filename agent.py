@@ -142,7 +142,9 @@ def verify_answer(answer: str) -> str:
         "不要列出与原文一致的项，不要解释。\n\n"
         f"候选人回答：{answer}\n\n简历/论文原文片段：\n{evidence}"
     )
-    return llm.invoke(prompt).content.strip()
+    return llm.invoke(
+        prompt, config={"callbacks": models.get_callbacks()}
+    ).content.strip()
 
 
 # ---------------- knowledge base loading & topic extraction ----------------
@@ -197,7 +199,9 @@ def generate_topics(jd_text: str, resume_text: str, n: int = 8) -> list:
         f"JD：\n{jd_text or '（无）'}\n\n"
         f"候选人简历/项目经历：\n{resume_text or '（无）'}"
     )
-    text = llm.invoke(prompt).content
+    text = llm.invoke(
+        prompt, config={"callbacks": models.get_callbacks()}
+    ).content
     topics = parse_topics(text)
     # de-duplicate topic names: LLMs sometimes parrot the format template
     seen = set()
@@ -315,7 +319,7 @@ def decision_node(state: InterviewState) -> dict:
         "现在决定下一步。"
     )
     try:
-        d = llm.invoke(prompt)
+        d = llm.invoke(prompt, config={"callbacks": models.get_callbacks()})
         if not isinstance(d, Decision):
             d = None
     except Exception:
@@ -344,7 +348,9 @@ def _ask_followup(topic_text: str, history: str) -> str:
         f"当前话题：{topic_text}\n\n"
         f"最近对话：\n{history}\n\n追问："
     )
-    return llm.invoke(prompt).content.strip()
+    return llm.invoke(
+        prompt, config={"callbacks": models.get_callbacks()}
+    ).content.strip()
 
 
 def _ask_topic_question(topic_text: str, history: str) -> str:
@@ -357,7 +363,9 @@ def _ask_topic_question(topic_text: str, history: str) -> str:
         f"新话题：{topic_text}\n\n"
         f"最近对话：\n{history}\n\n你要说的话："
     )
-    return llm.invoke(prompt).content.strip()
+    return llm.invoke(
+        prompt, config={"callbacks": models.get_callbacks()}
+    ).content.strip()
 
 
 def interviewer_node(state: InterviewState) -> dict:
@@ -397,7 +405,7 @@ def wrap_node(state: InterviewState) -> dict:
         "1. 整体表现总结（2-3 句）\n2. 最突出的 1 个优点\n3. 最需改进的 1 个问题\n\n"
         f"面试记录：\n{transcript}"
     )
-    summary = llm.invoke(prompt).content
+    summary = llm.invoke(prompt, config={"callbacks": models.get_callbacks()}).content
     # Evidence verification runs once at the end (WBS 4.5). Only answers that
     # carry hard numbers/metrics are worth checking; keep the batch small so
     # the checker does not confuse "absent from the source" with "contradicts".
@@ -416,7 +424,8 @@ def wrap_node(state: InterviewState) -> dict:
     # Tool calling: let the LLM decide to export the report via the tool
     llm_with_tools = llm.bind_tools([export_report])
     tool_msg = llm_with_tools.invoke(
-        f"请调用 export_report 工具，把下面的复盘报告保存为 interview_report.md：\n\n{summary}"
+        f"请调用 export_report 工具，把下面的复盘报告保存为 interview_report.md：\n\n{summary}",
+        config={"callbacks": models.get_callbacks()},
     )
     export_note = ""
     for call in tool_msg.tool_calls:

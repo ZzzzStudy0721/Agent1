@@ -24,8 +24,23 @@ import models  # noqa: E402
 
 
 def _clean_env():
-    for k in ("CHAT_MODEL", "CHAT_BASE_URL", "CHAT_API_KEY"):
+    for k in ("CHAT_MODEL", "CHAT_BASE_URL", "CHAT_API_KEY", "LANGFUSE_PUBLIC_KEY"):
         os.environ.pop(k, None)
+
+
+def test_callbacks_disabled_without_langfuse_key():
+    _clean_env()
+    assert models.get_callbacks() == [], "no Langfuse key -> no callbacks"
+
+
+def test_callbacks_enabled_with_langfuse_key():
+    _clean_env()
+    os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-test"
+    os.environ["LANGFUSE_SECRET_KEY"] = "sk-test"
+    callbacks = models.get_callbacks()
+    assert len(callbacks) == 1
+    print(f"[langfuse] {type(callbacks[0]).__name__} constructed (no network call)")
+    _clean_env()
 
 
 def test_default_is_deepseek():
@@ -50,4 +65,6 @@ if __name__ == "__main__":
     test_default_is_deepseek()
     print("[deepseek] default factory resolves to ChatDeepSeek")
     test_openai_compatible_switch()
+    test_callbacks_disabled_without_langfuse_key()
+    test_callbacks_enabled_with_langfuse_key()
     print("\nModel factory test passed")

@@ -102,14 +102,22 @@ def generate(query: str, context_docs: list, llm) -> str:
     # max_tokens caps long-winded answers: LLM generation is the biggest latency
     # slice (6-7.5s), and short answers are also better for interview demos
     start = time.perf_counter()
-    answer = llm.invoke(_build_messages(query, context_docs), max_tokens=350).content
+    answer = llm.invoke(
+        _build_messages(query, context_docs),
+        max_tokens=350,
+        config={"callbacks": models.get_callbacks()},
+    ).content
     logger.info("LLM answer for %r: %.2fs", query[:30], time.perf_counter() - start)
     return answer
 
 
 def stream_answer(query: str, context_docs: list, llm):
     """Yield answer chunks as they are generated (SSE-friendly)."""
-    for chunk in llm.stream(_build_messages(query, context_docs), max_tokens=350):
+    for chunk in llm.stream(
+        _build_messages(query, context_docs),
+        max_tokens=350,
+        config={"callbacks": models.get_callbacks()},
+    ):
         if chunk.content:
             yield chunk.content
 

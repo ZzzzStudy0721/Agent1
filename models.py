@@ -51,3 +51,18 @@ def get_chat_model(temperature: float = 0.1) -> BaseChatModel:
             timeout=120,
         )
     return init_chat_model(model, temperature=temperature, max_retries=2, timeout=120)
+
+
+def get_callbacks() -> list:
+    """Langfuse callback handlers if configured, else an empty list.
+
+    With LANGFUSE_PUBLIC_KEY set, pass the result as
+    `config={"callbacks": models.get_callbacks()}` on LLM calls to trace
+    tokens/latency (one fresh handler = one trace). Zero overhead otherwise:
+    the heavy langfuse import happens only when configured.
+    """
+    if not os.environ.get("LANGFUSE_PUBLIC_KEY"):
+        return []
+    from langfuse.langchain import CallbackHandler  # noqa: PLC0415
+
+    return [CallbackHandler()]
