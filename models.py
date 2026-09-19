@@ -73,6 +73,33 @@ def get_chat_model(temperature: float = 0.1) -> BaseChatModel:
     )
 
 
+def get_judge_model(temperature: float = 0.0) -> BaseChatModel:
+    """Instantiate the judge model for LLM-as-judge evaluation.
+
+    Independent of the generation backend (defaults to DeepSeek) so scoring
+    stays cross-vendor and impartial.
+    """
+    s = get_settings()
+    if s.judge_base_url:
+        if not s.judge_api_key:
+            raise ValueError("JUDGE_BASE_URL is set, so JUDGE_API_KEY must be set too")
+        return ChatOpenAI(
+            model=s.judge_model,
+            base_url=s.judge_base_url,
+            api_key=s.judge_api_key,
+            temperature=temperature,
+            max_retries=2,
+            timeout=120,
+        )
+    if s.judge_model.startswith("deepseek") and not s.deepseek_api_key:
+        raise ValueError(
+            "DEEPSEEK_API_KEY is not set: the default judge needs it (see README section 2)"
+        )
+    return init_chat_model(
+        s.judge_model, temperature=temperature, max_retries=2, timeout=120
+    )
+
+
 def get_callbacks() -> list:
     """Langfuse callback handlers if configured, else an empty list.
 

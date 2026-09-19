@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     # DeepSeek credential for the default branch
     deepseek_api_key: str = ""
 
+    # Judge model for LLM-as-judge evaluation (kept separate from the
+    # generation backend so scoring stays impartial / cross-vendor)
+    judge_model: str = "deepseek-chat"
+    judge_base_url: str = ""
+    judge_api_key: str = ""
+
     # Langfuse tracing (optional; empty = disabled)
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

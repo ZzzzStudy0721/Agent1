@@ -14,6 +14,7 @@
 - **重排精排**：本地 CrossEncoder（bge-reranker-base）对候选精排
 - **流式输出 + 异步服务**：`/chat` 走 SSE 边生成边返回；端点异步 + 检索放线程池（asyncio.to_thread），事件循环不阻塞
 - **Langfuse 追踪**：配置 key 后所有 LLM 调用自动上报 trace（token 成本、延迟）；未配置零开销
+- **对话质量评估（LLM-as-judge）**：三维 rubric（相关性/具体性/深挖引导力）1-5 分带锚点，judge 与生成端异源防偏袒；决策路由用人工标注比对算准确率；judge 自身有人工抽样一致性验证
 - **引用溯源 + 无出处拒答**：检索层向量相似度门限（0.2）硬约束，搜不到相关内容直接拒答，LLM 无编造空间
 - **自由对话式面试官**：无固定题单，面试官即兴提问 + 深入追问，最接近真人面试
 - **LLM 决策路由**：每轮由 LLM 结构化决策（深挖追问 / 切换话题 / 结束面试），LangGraph 状态机保证流程可控
@@ -131,6 +132,7 @@ streamlit run ui.py
 pytest tests/                     # 一键全跑；无 DEEPSEEK_API_KEY 时自动跳过 live 测试
 pytest tests/ -m "not live"       # 只跑不依赖 API key 的纯逻辑测试
 python tests/eval_retrieval.py    # 四模式消融评估（单独跑）
+python evaluation/eval_judge.py   # 对话质量评估：三场景面试 + LLM-as-judge 跑分（单独跑）
 ```
 
 CI：`.github/workflows/tests.yml`，push 后 GitHub Actions 自动跑（无 key 跑纯逻辑套件，配 `DEEPSEEK_API_KEY` secret 后连 live 测试一起跑）。
@@ -145,8 +147,9 @@ CI：`.github/workflows/tests.yml`，push 后 GitHub Actions 自动跑（无 key
 ├── settings.py       # pydantic-settings 集中配置，缺 key 启动即报错
 ├── api.py            # FastAPI 服务层（/chat SSE 流式、/upload）
 ├── ui.py             # Streamlit 界面（问答 + 模拟面试）
+├── evaluation/       # 对话质量评估（LLM-as-judge 跑分 + 路由标注模板 + 报告）
 ├── data/             # 知识库（gitignore）
-├── tests/            # 9 个测试脚本 + 23 题测试集
+├── tests/            # 测试脚本 + 23 题测试集
 └── chroma_db/        # 向量库持久化（gitignore）
 ```
 
