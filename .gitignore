@@ -19,3 +19,6 @@ reports/
 # Streamlit
 .streamlit/secrets.toml
 面试话术.md
+
+# langgraph dev local state (threads/checkpoints)
+.langgraph_api/

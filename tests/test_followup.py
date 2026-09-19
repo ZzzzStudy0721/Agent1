@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent
+from langchain_core.messages import HumanMessage
 import pytest
 
 TOPICS = ["话题A：说明A", "话题B：说明B", "话题C：说明C"]
@@ -98,15 +99,15 @@ def test_route_after_decision():
 @pytest.mark.live
 def test_live_short_answer_round():
     # one live round: short answer, graph must return one question and stay open
-    graph = agent.build_graph()
+    graph = agent.build_turn_graph()
     state = agent.init_state(TOPICS)
-    state["messages"] = [("user", "用了 YOLOv8n。")]
+    state["messages"] = [HumanMessage(content="用了 YOLOv8n。")]
     result = graph.invoke(state)
     print(f"[live round] output: {result['output'][:100]!r}")
     assert result["output"], "empty output"
     assert result["round_count"] == 1
     assert not result["finished"], "interview should not end after one round"
-    assert result["messages"][-1][0] == "assistant"
+    assert result["messages"][-1].type == "ai"
 
 
 if __name__ == "__main__":

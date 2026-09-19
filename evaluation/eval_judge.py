@@ -21,6 +21,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import agent  # noqa: E402
+from langchain_core.messages import HumanMessage  # noqa: E402
 
 from judge import judge_question, summarize  # noqa: E402
 
@@ -126,13 +127,13 @@ def write_calibration(results: list) -> None:
 def run_scripted_interview(answers: list) -> list:
     """Drive one full interview with scripted answers; returns per-round records
     (question text, decision, topic, and the history the interviewer saw)."""
-    graph = agent.build_graph()
+    graph = agent.build_turn_graph()
     state = agent.init_state(agent.DEFAULT_TOPICS)
     pool = itertools.cycle(answers)
     rounds = []
     while not state["finished"]:
         ans = next(pool)
-        state["messages"] = state["messages"] + [("user", ans)]
+        state["messages"] = state["messages"] + [HumanMessage(content=ans)]
         state["output"] = ""
         state["decision"] = {}
         result = graph.invoke(state)

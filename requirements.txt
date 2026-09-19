@@ -5,6 +5,7 @@ langchain-chroma
 langchain-text-splitters
 langchain-openai
 langgraph
+langgraph-cli[inmem]
 chromadb
 sentence-transformers
 rank-bm25

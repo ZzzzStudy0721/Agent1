@@ -6,7 +6,7 @@
 
 ## 技术栈
 
-`LangChain` · `LangGraph` · `ChromaDB` · `FastAPI` · `Streamlit` · 多后端可切换（DeepSeek 实测默认 + OpenAI 兼容端点接 GLM 等国内模型）· `BM25 + RRF` · `CrossEncoder 重排` · 本地 `bge-small-zh-v1.5` embedding
+`LangChain` · `LangGraph` · `LangGraph CLI (Harness)` · `ChromaDB` · `FastAPI` · `Streamlit` · 多后端可切换（DeepSeek 实测默认 + OpenAI 兼容端点接 GLM 等国内模型）· `BM25 + RRF` · `CrossEncoder 重排` · 本地 `bge-small-zh-v1.5` embedding
 
 ## 核心特性
 
@@ -16,6 +16,7 @@
 - **Langfuse 追踪**：配置 key 后所有 LLM 调用自动上报 trace（token 成本、延迟）；未配置零开销
 - **对话质量评估（LLM-as-judge）**：三维 rubric（相关性/具体性/深挖引导力）1-5 分带锚点，judge 与生成端异源防偏袒；决策路由用人工标注比对算准确率；judge 自身有人工抽样一致性验证
 - **引用溯源 + 无出处拒答**：检索层向量相似度门限（0.2）硬约束，搜不到相关内容直接拒答，LLM 无编造空间
+- **LangGraph Harness 调试**：`langgraph dev` 一条命令起本地服务 + 网页调试 UI（无需自研前端），图内 `interrupt()` 驱动多轮对话、平台按 thread 托管状态，每轮的 state / 决策路由 / 消息流都可在 UI 里逐步回放
 - **自由对话式面试官**：无固定题单，面试官即兴提问 + 深入追问，最接近真人面试
 - **LLM 决策路由**：每轮由 LLM 结构化决策（深挖追问 / 切换话题 / 结束面试），LangGraph 状态机保证流程可控
 - **话题锚点**：从目标岗位 JD + 候选人简历/项目文档抽取 8 个话题锚点，面试围绕锚点自由发挥、不跑题
@@ -50,16 +51,30 @@
     └────────────────────┘    └──────────────────┘
 ```
 
-面试状态机（LangGraph）——每轮对话 invoke 一次图，循环由 Python 驱动：
+面试状态机（LangGraph）分两层：
+
+**单轮子图**（一次面试官发言，`build_turn_graph()`，纯 DAG）：
 
 ```
 START → 护栏检查（轮数≥20 或话题全覆盖？）──是──→ 复盘总结 + 证据核实
         │                                         → 调用 export_report → END
         └─否→ LLM 决策节点（结构化输出）
-               ├─ 深挖追问 ──→ 面试官生成追问 → END（下一轮回到 START）
+               ├─ 深挖追问 ──→ 面试官生成追问 → END
                ├─ 切换话题 ──→ 面试官挑未覆盖话题提问 → END
                └─ 结束 ─────→ 复盘总结 + 证据核实 → export_report → END
 ```
+
+**整场循环图**（`build_interview_graph()`，Harness / CLI / Streamlit 共用）：
+
+```
+START → 话题锚点准备 → 问候语 → interrupt（等候选人回答）
+                                   ↑                    ↓ 回答到达
+                                   └── 单轮子图 ←───────┘
+                                        │（决策=结束）
+                                        └──→ 复盘打分 → 报告导出 → END
+```
+
+循环由 `interrupt()` 驱动：每轮结束图挂起等用户回答，由 checkpointer 按 thread 持久化状态——`langgraph dev` 下由平台托管，本地 CLI / Streamlit 用 `MemorySaver`。子图单独编译成 DAG，供离线评估脚本按「每轮 invoke 一次」的方式复用。
 
 ## 消融实验（自建 23 题测试集）
 
@@ -126,6 +141,16 @@ uvicorn api:fastapi_app --host 127.0.0.1 --port 8000
 streamlit run ui.py
 ```
 
+**D. LangGraph Harness 调试界面**（`langgraph dev`，本地一条命令起服务 + 网页调试 UI）：
+
+```bash
+langgraph dev          # 中文 Windows 用 dev.bat，或先 set PYTHONUTF8=1
+```
+
+启动后浏览器自动打开调试 UI（也可手动访问 `https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`），在页面里**新建 Thread → Run** 开始面试，输入框提交回答即可，无需任何自定义前端。面试状态由平台按 thread 持久化，可随时查看每轮的 state、决策路由和消息流。首次启动需加载本地 embedding 模型，请耐心等待。
+
+> 中文 Windows 注意：必须设置 `PYTHONUTF8=1`（`dev.bat` 已内置），否则 langgraph-api 会用 GBK 读取内置配置直接崩溃。
+
 ### 5. 测试
 
 ```bash
@@ -143,6 +168,9 @@ CI：`.github/workflows/tests.yml`，push 后 GitHub Actions 自动跑（无 key
 ├── app.py            # RAG 问答：加载→切分→向量化→混合检索→重排→拒答→生成
 ├── retrieval.py      # BM25 索引、RRF 融合、CrossEncoder 重排
 ├── agent.py          # LangGraph 面试状态机 + LLM 决策路由 + 话题锚点 + 证据核实 + Tool
+├── langgraph_app.py  # Harness 入口：暴露打好的循环图给 langgraph dev
+├── langgraph.json    # LangGraph CLI 配置（graphs / env）
+├── dev.bat           # Windows 一键启动 Harness（含 PYTHONUTF8）
 ├── models.py         # 模型工厂：DeepSeek / OpenAI 兼容（GLM 等），env 切换
 ├── settings.py       # pydantic-settings 集中配置，缺 key 启动即报错
 ├── api.py            # FastAPI 服务层（/chat SSE 流式、/upload）

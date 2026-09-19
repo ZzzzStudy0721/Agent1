@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent
+from langchain_core.messages import HumanMessage
 import pytest
 
 pytestmark = pytest.mark.live  # real LLM calls end to end
@@ -37,13 +38,13 @@ ANSWER_POOL = [
 
 
 def test_full_interview():
-    graph = agent.build_graph()
+    graph = agent.build_turn_graph()
     state = agent.init_state(agent.DEFAULT_TOPICS)
     pool = itertools.cycle(ANSWER_POOL)  # guards against a runaway interview
     rounds = 0
     while not state["finished"]:
         ans = next(pool)  # raises StopIteration if the interview runs away
-        state["messages"] = state["messages"] + [("user", ans)]
+        state["messages"] = state["messages"] + [HumanMessage(content=ans)]
         state["output"] = ""
         state["decision"] = {}
         result = graph.invoke(state)

@@ -5,7 +5,10 @@ Run in two terminals:
   2. streamlit run ui.py
 """
 import json
+import uuid
 
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 import requests
 import streamlit as st
 
@@ -94,26 +97,25 @@ elif page == "🎤 模拟面试":
     )
 
     def start_interview():
+        graph = agent.build_interview_graph(MemorySaver())
+        config = {"configurable": {"thread_id": uuid.uuid4().hex}}
         with st.spinner("话题锚点抽取中…"):
-            topics = agent.prepare_topics()
-        graph = agent.build_graph()
+            result = graph.invoke(agent.init_state(), config)
         st.session_state.interview = {
             "graph": graph,
-            "state": agent.init_state(topics),
-            "log": [("assistant", agent.GREETING)],
+            "config": config,
+            "state": dict(result),
+            "log": [("assistant", agent._last_ai_text(result))],
             "finished": False,
         }
 
     def advance(answer):
         it = st.session_state.interview
         it["log"].append(("user", answer))
-        it["state"]["messages"] = it["state"]["messages"] + [("user", answer)]
-        it["state"]["output"] = ""
-        it["state"]["decision"] = {}
-        result = it["graph"].invoke(it["state"])
-        it["log"].append(("assistant", result["output"]))
+        result = it["graph"].invoke(Command(resume=answer), it["config"])
         it["state"] = dict(result)
         it["finished"] = result["finished"]
+        it["log"].append(("assistant", agent._last_ai_text(result)))
 
     if st.button("开始 / 重新开始面试") or st.session_state.pop("start_interview", False):
         start_interview()
