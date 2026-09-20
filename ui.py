@@ -6,13 +6,16 @@ Run in two terminals:
 """
 import json
 import uuid
+from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 import requests
 import streamlit as st
 
-import agent
+# NOTE: `agent` is imported lazily inside the interview functions below.
+# Importing it here would run torch / sentence-transformers at page-load time,
+# blocking the whole script for 1-2 minutes — the page looks broken until then.
 
 API = "http://127.0.0.1:8000"
 
@@ -97,9 +100,14 @@ elif page == "🎤 模拟面试":
     )
 
     def start_interview():
+        # Lazy import: agent pulls in torch + sentence-transformers (~1.6 GB RSS,
+        # 1-2 min on first load). Doing it inside the spinner keeps the page
+        # itself instant and tells the user why the button is slow.
+        import agent
+
         graph = agent.build_interview_graph(MemorySaver())
-        config = {"configurable": {"thread_id": uuid.uuid4().hex}}
-        with st.spinner("话题锚点抽取中…"):
+        config: Any = {"configurable": {"thread_id": uuid.uuid4().hex}}
+        with st.spinner("正在加载模型并抽取话题锚点（首次约 1-2 分钟）…"):
             result = graph.invoke(agent.init_state(), config)
         st.session_state.interview = {
             "graph": graph,
@@ -110,6 +118,8 @@ elif page == "🎤 模拟面试":
         }
 
     def advance(answer):
+        import agent
+
         it = st.session_state.interview
         it["log"].append(("user", answer))
         result = it["graph"].invoke(Command(resume=answer), it["config"])
