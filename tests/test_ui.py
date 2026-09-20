@@ -50,3 +50,17 @@ def test_ui_page_renders_without_exception():
     at = AppTest.from_file(UI, default_timeout=300)
     at.run()
     assert not at.exception, [e.value for e in at.exception]
+
+
+def test_interview_page_renders_upload_area():
+    """Interview tab shows the resume/JD upload area, still without loading models."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(UI, default_timeout=300)
+    at.run()
+    at.sidebar.radio[0].set_value("🎤 模拟面试").run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    labels = [e.label for e in at.expander]
+    assert any("上传简历" in label for label in labels), labels
+    assert len(at.file_uploader) == 2, [u.label for u in at.file_uploader]

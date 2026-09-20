@@ -4,6 +4,7 @@ Standalone functions (load_and_chunk / retrieve / generate) so that M3 can
 mount them as LangGraph nodes without rewriting.
 """
 
+import io
 import logging
 import os
 import sys
@@ -68,6 +69,67 @@ def load_and_chunk(data_dir: str = DATA_DIR) -> list:
             continue
         chunks.extend(splitter.split_documents([doc]))
     return chunks
+
+
+def extract_text(source, filename: str) -> str:
+    """Extract plain text from an uploaded file (.md / .txt / .pdf / .docx).
+
+    `source` is a filesystem path or raw bytes. Word tables are flattened into
+    pipe-separated rows: resumes are usually laid out as tables, and
+    `document.paragraphs` alone would silently drop most of the content.
+    Raises ValueError when nothing readable comes out (e.g. a scanned PDF), so
+    the caller can tell the user instead of indexing an empty document.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in ('.md', '.txt'):
+        if isinstance(source, bytes):
+            raw = source
+        else:
+            with open(source, 'rb') as f:
+                raw = f.read()
+        text = raw.decode('utf-8', errors='replace')
+    elif ext == '.pdf':
+        from pypdf import PdfReader
+
+        stream = io.BytesIO(source) if isinstance(source, bytes) else source
+        text = '\n'.join((page.extract_text() or '') for page in PdfReader(stream).pages)
+    elif ext == '.docx':
+        import docx
+
+        stream = io.BytesIO(source) if isinstance(source, bytes) else source
+        document = docx.Document(stream)
+        parts = [p.text for p in document.paragraphs]
+        for table in document.tables:
+            for row in table.rows:
+                parts.append(' | '.join(cell.text.strip() for cell in row.cells))
+        text = '\n'.join(parts)
+    else:
+        raise ValueError(f'不支持的文件格式 {ext}（支持 md / txt / pdf / docx）')
+    text = text.strip()
+    if not text:
+        raise ValueError('没有提取到文字（可能是扫描版 PDF 或纯图片文档）')
+    return text
+
+
+def rebuild_index() -> int:
+    """Rebuild the persisted vector store from data/; returns the chunk count.
+
+    Called after an upload so the new document is searchable by both the Q&A
+    pipeline and the interview evidence check.
+    """
+    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+    chunks = load_and_chunk()
+    existing = Chroma(
+        embedding_function=embeddings,
+        persist_directory=DB_DIR,
+        collection_name=COLLECTION,
+    )
+    try:
+        existing.delete_collection()
+    except Exception:
+        pass
+    build_vectorstore(chunks, embeddings, collection_name=COLLECTION)
+    return len(chunks)
 
 
 def build_vectorstore(chunks: list, embeddings, collection_name: str = 'langchain') -> Chroma:

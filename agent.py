@@ -47,6 +47,13 @@ import retrieval
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 REPORTS_DIR = os.path.join(BASE_DIR, 'reports')
 
+# Dedicated interview inputs written by the UI upload flow. When these exist,
+# topic anchors come from them alone instead of the whole data/ folder, so a
+# freshly uploaded resume drives the interview while the rest of the knowledge
+# base keeps serving evidence checks.
+UPLOADED_RESUME = 'uploaded_resume.md'
+UPLOADED_JD = 'uploaded_JD.md'
+
 logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 20  # hard cap on interviewer turns (guardrail)
@@ -112,6 +119,16 @@ def export_report(filename: str, content: str) -> str:
 _checker = None  # lazy-loaded retrieval pipeline for evidence verification
 
 
+def reset_checker() -> None:
+    """Drop the cached pipeline — call after the vector index is rebuilt.
+
+    The cached Chroma handle points at the collection that a rebuild deletes,
+    so evidence checks would silently query a stale/dead collection without it.
+    """
+    global _checker
+    _checker = None
+
+
 def _get_checker():
     """Lazily build the (vectorstore, bm25, reranker) pipeline once per process."""
     global _checker
@@ -161,8 +178,27 @@ def verify_answer(answer: str) -> str:
 # ---------------- knowledge base loading & topic extraction ----------------
 
 
+def save_uploaded_doc(text: str, kind: str, data_dir: str = DATA_DIR) -> str:
+    """Persist an uploaded resume / JD as the dedicated interview input.
+
+    `kind` is 'resume' or 'jd'. Stored as .md so the existing loaders and the
+    vector index pick it up with no extra plumbing. Returns the path written.
+    """
+    if kind not in ('resume', 'jd'):
+        raise ValueError(f'unknown kind: {kind}')
+    os.makedirs(data_dir, exist_ok=True)
+    path = os.path.join(data_dir, UPLOADED_RESUME if kind == 'resume' else UPLOADED_JD)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return path
+
+
 def load_jd(data_dir: str = DATA_DIR) -> str | None:
-    """Read the first file whose name contains 'JD' from the knowledge base."""
+    """Read the uploaded JD if present, else the first data/ file named *JD*."""
+    uploaded = os.path.join(data_dir, UPLOADED_JD)
+    if os.path.isfile(uploaded):
+        with open(uploaded, encoding='utf-8') as f:
+            return f.read()
     if not os.path.isdir(data_dir):
         return None
     for name in sorted(os.listdir(data_dir)):
@@ -173,7 +209,11 @@ def load_jd(data_dir: str = DATA_DIR) -> str | None:
 
 
 def load_resume(data_dir: str = DATA_DIR, max_chars: int = 8000) -> str:
-    """Read non-JD knowledge-base files (resume / thesis / project docs)."""
+    """Read the uploaded resume if present, else all non-JD data/ files."""
+    uploaded = os.path.join(data_dir, UPLOADED_RESUME)
+    if os.path.isfile(uploaded):
+        with open(uploaded, encoding='utf-8') as f:
+            return f.read()[:max_chars]
     if not os.path.isdir(data_dir):
         return ''
     parts = []

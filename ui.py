@@ -5,6 +5,7 @@ Run in two terminals:
   2. streamlit run ui.py
 """
 import json
+import os
 import uuid
 from typing import Any
 
@@ -127,10 +128,88 @@ elif page == "🎤 模拟面试":
         it["finished"] = result["finished"]
         it["log"].append(("assistant", agent._last_ai_text(result)))
 
-    if st.button("开始 / 重新开始面试") or st.session_state.pop("start_interview", False):
-        start_interview()
+    def _sync_uploads() -> bool:
+        """Persist the edited previews to data/ and reindex only if they changed.
+
+        Compares against what is already on disk, so hitting "start" twice does
+        not rebuild the index again.
+        """
+        import agent
+
+        changed = False
+        for kind, key in (("resume", "resume_preview"), ("jd", "jd_preview")):
+            text = (st.session_state.get(key) or "").strip()
+            if not text:
+                continue
+            name = agent.UPLOADED_RESUME if kind == "resume" else agent.UPLOADED_JD
+            path = os.path.join(agent.DATA_DIR, name)
+            current = ""
+            if os.path.isfile(path):
+                with open(path, encoding="utf-8") as f:
+                    current = f.read().strip()
+            if text != current:
+                agent.save_uploaded_doc(text, kind)
+                changed = True
+        if changed:
+            import app
+
+            agent.reset_checker()
+            with st.spinner("正在重建检索索引（约半分钟）…"):
+                app.rebuild_index()
+        return changed
 
     it = st.session_state.get("interview")
+
+    # ---------- optional: upload the resume / JD this interview should use ----------
+    with st.expander("📄 上传简历 / 岗位 JD（可选）", expanded=not it):
+        st.caption(
+            "支持 PDF、Word(.docx)、md、txt。提取出的文字先显示在下面，确认无误再点开始按钮；"
+            "不传则沿用 data/ 目录里已有的资料。"
+        )
+        col_resume, col_jd = st.columns(2)
+        with col_resume:
+            resume_up = st.file_uploader(
+                "简历", type=["pdf", "docx", "md", "txt"], key="up_resume"
+            )
+        with col_jd:
+            jd_up = st.file_uploader(
+                "岗位 JD 文件（可选）", type=["pdf", "docx", "md", "txt"], key="up_jd"
+            )
+
+        if resume_up is not None and st.session_state.get("_seen_resume") != resume_up.name:
+            import app
+
+            st.session_state["_seen_resume"] = resume_up.name
+            try:
+                st.session_state.resume_preview = app.extract_text(
+                    resume_up.getvalue(), resume_up.name
+                )
+            except ValueError as e:
+                st.session_state.resume_preview = ""
+                st.error(f"简历解析失败：{e}")
+
+        if jd_up is not None and st.session_state.get("_seen_jd") != jd_up.name:
+            import app
+
+            st.session_state["_seen_jd"] = jd_up.name
+            try:
+                st.session_state.jd_preview = app.extract_text(jd_up.getvalue(), jd_up.name)
+            except ValueError as e:
+                st.error(f"JD 解析失败：{e}")
+
+        if st.session_state.get("_seen_resume"):
+            st.text_area("简历文字（提取结果，可直接修改）", key="resume_preview", height=220)
+        st.text_area(
+            "岗位 JD（可直接粘贴文字，也可上传文件；留空表示不用 JD）",
+            key="jd_preview",
+            height=120,
+        )
+
+    if st.button("开始 / 重新开始面试") or st.session_state.pop("start_interview", False):
+        _sync_uploads()
+        start_interview()
+
+    it = st.session_state.get("interview")  # start_interview() may have just set it
     if it:
         for role, content in it["log"]:
             with st.chat_message(role):
