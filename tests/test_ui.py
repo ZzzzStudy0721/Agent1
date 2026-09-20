@@ -52,6 +52,38 @@ def test_ui_page_renders_without_exception():
     assert not at.exception, [e.value for e in at.exception]
 
 
+def test_uploaded_resume_shows_extracted_preview():
+    """Uploading a Word resume parses it and shows the text for confirmation.
+
+    Drives the real page: if the session_state / widget ordering breaks, this
+    fails with a StreamlitAPIException instead of a blank upload area.
+    """
+    import io
+
+    import docx
+    from streamlit.testing.v1 import AppTest
+
+    document = docx.Document()
+    document.add_paragraph("上传的简历：精通 Python")
+    buf = io.BytesIO()
+    document.save(buf)
+
+    at = AppTest.from_file(UI, default_timeout=300)
+    at.run()
+    at.sidebar.radio[0].set_value("🎤 模拟面试").run()
+    at.file_uploader[0].set_value(
+        (
+            "我的简历.docx",
+            buf.getvalue(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    ).run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    preview = at.text_area(key="resume_preview")
+    assert "精通 Python" in preview.value
+
+
 def test_interview_page_renders_upload_area():
     """Interview tab shows the resume/JD upload area, still without loading models."""
     from streamlit.testing.v1 import AppTest
