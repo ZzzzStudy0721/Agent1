@@ -19,6 +19,7 @@ reports/
 # Streamlit
 .streamlit/secrets.toml
 面试话术.md
+面试问答手册.md
 
 # langgraph dev local state (threads/checkpoints)
 .langgraph_api/
