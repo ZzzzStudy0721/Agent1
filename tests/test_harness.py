@@ -26,14 +26,30 @@ TOPICS = ["话题A：说明A", "话题B：说明B", "话题C：说明C"]
 
 
 class FakeLLM:
-    """Stub chat model: structured output returns a scripted Decision, plain
-    invoke returns fixed text, tool calling returns no tool calls."""
+    """Stub chat model: structured output returns a scripted Decision — or a
+    scripted InterviewScore when wrap asks for the review scores — plain invoke
+    returns fixed text, tool calling returns no tool calls."""
 
-    def __init__(self, decision=None, text="追问：请补充量化数据。"):
+    def __init__(self, decision=None, text="追问：请补充量化数据。", score=None):
         self._decision = decision or agent.Decision(action="followup")
         self._text = text
+        # every structured call's `method` kwarg, for the regression test below
+        self.methods: list = []
+        self._score = score or agent.InterviewScore(
+            technical_depth=7,
+            communication=6,
+            project_experience=8,
+            job_fit=7,
+            star_completeness=5,
+            summary="整体表现稳健，项目细节讲得清楚。",
+            strength="项目经历描述具体。",
+            improvement="缺少量化数据。",
+        )
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, **kwargs):
+        self.methods.append(kwargs.get("method"))
+        if schema is agent.InterviewScore:
+            return _Structured(self._score)
         return _Structured(self._decision)
 
     def invoke(self, *args, **kwargs):
@@ -132,6 +148,68 @@ def test_end_decision_wraps_interview(monkeypatch):
     assert result["finished"]
     assert result["messages"][-1].type == "ai"
     assert "面试结束" in result["messages"][-1].content
+
+
+def test_wrap_records_structured_score(monkeypatch):
+    """The review must write a chartable score dict, not just prose."""
+    monkeypatch.setattr(agent, "prepare_topics", lambda n=8: TOPICS)
+    monkeypatch.setattr(agent, "verify_answer", lambda answer: "无冲突")
+    monkeypatch.setattr(
+        agent.models,
+        "get_chat_model",
+        lambda temperature=0: FakeLLM(
+            decision=agent.Decision(action="end"), text="总结：表现不错。"
+        ),
+    )
+    graph = agent.build_interview_graph(MemorySaver())
+    config, _ = _start(graph, "t-score")
+    result = graph.invoke(Command(resume="介绍完毕。"), config)
+
+    assert result["score"]["technical_depth"] == 7
+    assert result["score"]["star_completeness"] == 5
+    assert set(result["score"]) >= {key for key, _ in agent.SCORE_DIMENSIONS}
+    content = result["messages"][-1].content
+    assert "本场评分" in content, "scores must show up in the chat transcript"
+
+
+def test_scoring_failure_falls_back_to_text(monkeypatch):
+    """A broken scoring call must not block the interview from wrapping up."""
+    monkeypatch.setattr(agent, "prepare_topics", lambda n=8: TOPICS)
+    monkeypatch.setattr(agent, "verify_answer", lambda answer: "无冲突")
+    llm = FakeLLM(decision=agent.Decision(action="end"), text="总结：表现不错。")
+
+    def boom(schema, **kwargs):
+        if schema is agent.InterviewScore:
+            raise RuntimeError("scoring backend down")
+        return _Structured(llm._decision)
+
+    monkeypatch.setattr(llm, "with_structured_output", boom)
+    monkeypatch.setattr(agent.models, "get_chat_model", lambda temperature=0: llm)
+    graph = agent.build_interview_graph(MemorySaver())
+    config, _ = _start(graph, "t-score-fail")
+    result = graph.invoke(Command(resume="介绍完毕。"), config)
+
+    assert result["finished"], "wrap must still finish"
+    assert result["score"] == {}
+    assert "总结：表现不错。" in result["messages"][-1].content
+
+
+def test_structured_calls_pin_function_calling(monkeypatch):
+    """Regression: DeepSeek's OpenAI-compatible endpoint ignores the json_schema
+    response format that `with_structured_output` picks by default — it answers
+    in prose, pydantic fails, and decision routing silently degrades to
+    `switch_topic` (no follow-ups at all). Every structured call must pin the
+    method explicitly; this test fails if a new call site forgets."""
+    monkeypatch.setattr(agent, "prepare_topics", lambda n=8: TOPICS)
+    monkeypatch.setattr(agent, "verify_answer", lambda answer: "无冲突")
+    llm = FakeLLM(decision=agent.Decision(action="end"), text="总结：表现不错。")
+    monkeypatch.setattr(agent.models, "get_chat_model", lambda temperature=0: llm)
+    graph = agent.build_interview_graph(MemorySaver())
+    config, _ = _start(graph, "t-method")
+    graph.invoke(Command(resume="介绍完毕。"), config)
+
+    assert llm.methods, "no structured call reached the model"
+    assert set(llm.methods) == {agent.models.STRUCTURED_METHOD}
 
 
 def test_finished_thread_gets_closing_note(monkeypatch):

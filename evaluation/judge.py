@@ -1,17 +1,17 @@
-"""LLM-as-judge for interviewer question quality (three-dimension rubric).
+"""面试官提问质量的 LLM-as-judge 评判器（三维度 rubric）。
 
-The judge runs on a different backend than the generation model (see
-models.get_judge_model) so scoring stays impartial. Each dimension is a
-1-5 integer with anchor descriptions; the verdict also carries a one-line
-reason per dimension for human spot-checks.
+judge 运行在与生成模型不同的后端上（见
+models.get_judge_model），以保证打分公正。每个维度是
+1-5 的整数并配有锚点描述；评判结果还为每个维度附带一句理由，
+供人工抽查。
 """
 from pydantic import BaseModel, Field
 
-from models import get_judge_model
+from models import STRUCTURED_METHOD, get_judge_model
 
 
 class JudgeVerdict(BaseModel):
-    """Structured output of the judge: three dimension scores + reasons."""
+    """judge 的结构化输出：三个维度的分数 + 理由。"""
 
     relevance: int = Field(ge=1, le=5)
     specificity: int = Field(ge=1, le=5)
@@ -36,14 +36,14 @@ JUDGE_PROMPT = (
 
 
 def judge_question(topic: str, history: str, question: str, llm=None) -> JudgeVerdict:
-    """Score one interviewer question; returns a JudgeVerdict."""
+    """给面试官的一个问题打分；返回一个 JudgeVerdict。"""
     llm = llm or get_judge_model()
     prompt = JUDGE_PROMPT.format(topic=topic, history=history, question=question)
-    return llm.with_structured_output(JudgeVerdict).invoke(prompt)
+    return llm.with_structured_output(JudgeVerdict, method=STRUCTURED_METHOD).invoke(prompt)
 
 
 def summarize(verdicts: list[JudgeVerdict]) -> dict:
-    """Aggregate verdicts into mean scores and pass rates (>=4 per dimension)."""
+    """把多条评判结果聚合成均分和通过率（每个维度 >=4 算通过）。"""
     if not verdicts:
         return {"n": 0}
     dims = ("relevance", "specificity", "depth")
