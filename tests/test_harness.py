@@ -6,6 +6,7 @@ an end decision wraps the interview, and a finished thread gets the closing
 note instead of a fresh greeting.
 """
 import os
+import re
 import sys
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 import agent  # noqa: E402
+import history  # noqa: E402
 from langchain_core.messages import HumanMessage  # noqa: E402
 from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
@@ -65,6 +67,35 @@ class _Structured:
 
     def invoke(self, *args, **kwargs):
         return self._decision
+
+
+class _ExportingLLM(FakeLLM):
+    """FakeLLM that answers the report-export call with a real tool call.
+
+    By default it echoes back the filename the prompt asked for; pass
+    `filename` to make it disobey, the way a real model sometimes does.
+    """
+
+    def __init__(self, *args, filename=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._filename = filename
+
+    def invoke(self, prompt, *args, **kwargs):
+        match = re.search(r'保存为 (\S+\.md)', prompt) if isinstance(prompt, str) else None
+        name = self._filename or (match.group(1) if match else None)
+        if not name:
+            return super().invoke(prompt, *args, **kwargs)
+        return SimpleNamespace(
+            content="",
+            tool_calls=[
+                {
+                    "name": "export_report",
+                    "args": {"filename": name, "content": "# 复盘报告"},
+                    "id": "call_1",
+                    "type": "tool_call",
+                }
+            ],
+        )
 
 
 @pytest.fixture
@@ -172,8 +203,10 @@ def test_wrap_records_structured_score(monkeypatch):
     assert "本场评分" in content, "scores must show up in the chat transcript"
 
 
-def test_scoring_failure_falls_back_to_text(monkeypatch):
+def test_scoring_failure_falls_back_to_text(monkeypatch, tmp_path):
     """A broken scoring call must not block the interview from wrapping up."""
+    monkeypatch.setattr(history, "REPORTS_DIR", str(tmp_path))
+    monkeypatch.setattr(history, "HISTORY_FILE", str(tmp_path / "history.json"))
     monkeypatch.setattr(agent, "prepare_topics", lambda n=8: TOPICS)
     monkeypatch.setattr(agent, "verify_answer", lambda answer: "无冲突")
     llm = FakeLLM(decision=agent.Decision(action="end"), text="总结：表现不错。")
@@ -192,6 +225,80 @@ def test_scoring_failure_falls_back_to_text(monkeypatch):
     assert result["finished"], "wrap must still finish"
     assert result["score"] == {}
     assert "总结：表现不错。" in result["messages"][-1].content
+    assert history.load_history() == [], "a scoreless run must not enter the history table"
+
+
+def test_wrap_records_history_entry(monkeypatch, tmp_path):
+    """Wrapping up must leave a history entry behind — that file is what the
+    history table (and later the radar / trend charts) reads."""
+    monkeypatch.setattr(history, "REPORTS_DIR", str(tmp_path))
+    monkeypatch.setattr(history, "HISTORY_FILE", str(tmp_path / "history.json"))
+    monkeypatch.setattr(agent, "prepare_topics", lambda n=8: TOPICS)
+    monkeypatch.setattr(agent, "verify_answer", lambda answer: "无冲突")
+    llm = FakeLLM(decision=agent.Decision(action="followup"))
+    monkeypatch.setattr(agent.models, "get_chat_model", lambda temperature=0: llm)
+    graph = agent.build_interview_graph(MemorySaver())
+    config, _ = _start(graph, "t-history")
+    graph.invoke(Command(resume="毕设做的是车辆检测。"), config)  # one interviewer turn
+    llm._decision = agent.Decision(action="end")  # then wrap up
+    graph.invoke(Command(resume="用的是 YOLOv8n。"), config)
+
+    entries = history.load_history()
+    assert len(entries) == 1, "exactly one entry per finished interview"
+    entry = entries[0]
+    assert entry["technical_depth"] == 7
+    assert entry["rounds"] == 1, "the round count comes from the finished state"
+    assert entry["topics"] == TOPICS
+    assert entry["job"] == history.DEFAULT_JOB
+    assert entry["time"], "the table sorts and labels rows by time"
+
+
+def test_report_filename_carries_a_timestamp(monkeypatch, tmp_path):
+    """Each run must export its own report file: with a fixed name every
+    history entry would point at whichever interview ran last."""
+    monkeypatch.setattr(history, "REPORTS_DIR", str(tmp_path))
+    monkeypatch.setattr(history, "HISTORY_FILE", str(tmp_path / "history.json"))
+    monkeypatch.setattr(agent, "REPORTS_DIR", str(tmp_path))
+    monkeypatch.setattr(agent, "prepare_topics", lambda n=8: TOPICS)
+    monkeypatch.setattr(agent, "verify_answer", lambda answer: "无冲突")
+    monkeypatch.setattr(
+        agent.models,
+        "get_chat_model",
+        lambda temperature=0: _ExportingLLM(decision=agent.Decision(action="end")),
+    )
+    graph = agent.build_interview_graph(MemorySaver())
+    config, _ = _start(graph, "t-report")
+    graph.invoke(Command(resume="介绍完毕。"), config)
+
+    report = history.load_history()[0]["report"]
+    assert re.fullmatch(r"interview_report_\d{8}_\d{4}\.md", report), report
+    assert os.path.isfile(os.path.join(str(tmp_path), report)), "the entry must point at a real file"
+
+
+def test_report_filename_is_imposed_on_the_model(monkeypatch, tmp_path):
+    """A model that exports under a filename of its own choosing must not break
+    the link between a history entry and its report file. The prompt asks for a
+    timestamped name, but a real model sometimes ignores that."""
+    monkeypatch.setattr(history, "REPORTS_DIR", str(tmp_path))
+    monkeypatch.setattr(history, "HISTORY_FILE", str(tmp_path / "history.json"))
+    monkeypatch.setattr(agent, "REPORTS_DIR", str(tmp_path))
+    monkeypatch.setattr(agent, "prepare_topics", lambda n=8: TOPICS)
+    monkeypatch.setattr(agent, "verify_answer", lambda answer: "无冲突")
+    monkeypatch.setattr(
+        agent.models,
+        "get_chat_model",
+        lambda temperature=0: _ExportingLLM(
+            decision=agent.Decision(action="end"), filename="随手起的名字.md"
+        ),
+    )
+    graph = agent.build_interview_graph(MemorySaver())
+    config, _ = _start(graph, "t-report-name")
+    graph.invoke(Command(resume="介绍完毕。"), config)
+
+    report = history.load_history()[0]["report"]
+    assert re.fullmatch(r"interview_report_\d{8}_\d{4}\.md", report), report
+    assert os.path.isfile(os.path.join(str(tmp_path), report))
+    assert not os.path.isfile(os.path.join(str(tmp_path), "随手起的名字.md"))
 
 
 def test_structured_calls_pin_function_calling(monkeypatch):

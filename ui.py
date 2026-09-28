@@ -14,6 +14,10 @@ from langgraph.types import Command
 import requests
 import streamlit as st
 
+# 与 agent 不同，history 只依赖标准库，可以在顶部导入：
+# 历史记录区随页面一起渲染，不会拖慢首屏。
+from history import SCORE_DIMENSIONS, load_history  # noqa: E402
+
 # 注意：`agent` 在下面的面试相关函数内部延迟导入。
 # 若在这里导入，页面加载时就会跑 torch / sentence-transformers，
 # 把整个脚本阻塞 1-2 分钟——在那之前页面看起来像是坏掉了。
@@ -208,6 +212,51 @@ elif page == "🎤 模拟面试":
     if st.button("开始 / 重新开始面试") or st.session_state.pop("start_interview", False):
         _sync_uploads()
         start_interview()
+
+    # ---------- 历史面试记录：分数表 + 单场详情回看 ----------
+    with st.expander("📊 历史面试记录"):
+        entries = load_history()
+        if not entries:
+            st.caption("还没有记录。完成一场面试后，分数和点评会自动存到这里。")
+        else:
+            st.dataframe(
+                [
+                    {
+                        "时间": e.get("time", ""),
+                        "岗位": e.get("job", ""),
+                        "轮数": e.get("rounds", 0),
+                        **{label: e.get(key, "") for key, label in SCORE_DIMENSIONS},
+                    }
+                    for e in entries
+                ],
+                hide_index=True,
+            )
+            pick = st.selectbox(
+                "查看某一场的详情",
+                range(len(entries)),
+                index=len(entries) - 1,
+                format_func=lambda i: (
+                    f"{entries[i].get('time', '未知时间')}"
+                    f"（{entries[i].get('rounds', 0)} 轮）"
+                ),
+            )
+            entry = entries[pick]
+            st.markdown(
+                "\n".join(
+                    f"- {label}：{entry.get(key, '?')}/10"
+                    for key, label in SCORE_DIMENSIONS
+                )
+            )
+            if entry.get("summary"):
+                st.write(entry["summary"])
+            if entry.get("strength"):
+                st.success(f"✅ 最突出的优点：{entry['strength']}")
+            if entry.get("improvement"):
+                st.warning(f"⚠️ 最需改进的问题：{entry['improvement']}")
+            if entry.get("topics"):
+                st.caption("本场话题：" + "；".join(entry["topics"]))
+            if entry.get("report"):
+                st.caption(f"📄 完整报告：reports/{entry['report']}")
 
     it = st.session_state.get("interview")  # start_interview() 可能刚把它设置好
     if it:

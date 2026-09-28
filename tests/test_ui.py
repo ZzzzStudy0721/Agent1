@@ -96,3 +96,70 @@ def test_interview_page_renders_upload_area():
     labels = [e.label for e in at.expander]
     assert any("上传简历" in label for label in labels), labels
     assert len(at.file_uploader) == 2, [u.label for u in at.file_uploader]
+
+
+def test_history_module_stays_standard_library_only():
+    """ui.py imports history at module level, so history must not grow a heavy
+    dependency (torch / langchain / streamlit) — that would put the 1-2 minute
+    page-load block right back."""
+    tree = ast.parse(open(os.path.join(BASE_DIR, "history.py"), encoding="utf-8").read())
+    assert _top_level_imports(tree) <= {"json", "logging", "os"}
+
+
+def test_history_area_invites_the_first_interview(monkeypatch, tmp_path):
+    """With no history file the area explains itself instead of rendering an
+    empty table."""
+    import history
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setattr(history, "HISTORY_FILE", str(tmp_path / "missing.json"))
+
+    at = AppTest.from_file(UI, default_timeout=300)
+    at.run()
+    at.sidebar.radio[0].set_value("🎤 模拟面试").run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("还没有记录" in c.value for c in at.caption), [c.value for c in at.caption]
+
+
+def test_history_area_shows_a_recorded_interview(monkeypatch, tmp_path):
+    """A recorded interview renders as a table row plus its detail view."""
+    import json
+
+    import history
+    from streamlit.testing.v1 import AppTest
+
+    entry = {
+        "time": "2026-09-29 20:15",
+        "job": "默认",
+        "rounds": 6,
+        "topics": ["毕设深挖"],
+        "report": "interview_report_20260929_2015.md",
+        "technical_depth": 7,
+        "communication": 6,
+        "project_experience": 8,
+        "job_fit": 7,
+        "star_completeness": 5,
+        "summary": "整体表现稳健。",
+        "strength": "项目经历描述具体。",
+        "improvement": "缺少量化数据。",
+    }
+    path = tmp_path / "history.json"
+    path.write_text(json.dumps([entry], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(history, "HISTORY_FILE", str(path))
+    monkeypatch.setattr(history, "REPORTS_DIR", str(tmp_path))
+
+    at = AppTest.from_file(UI, default_timeout=300)
+    at.run()
+    at.sidebar.radio[0].set_value("🎤 模拟面试").run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.dataframe, "the score table should render"
+    assert any("查看某一场的详情" in s.label for s in at.selectbox), [
+        s.label for s in at.selectbox
+    ]
+    scores = " ".join(m.value for m in at.markdown)
+    assert "整体表现稳健。" in scores, "the detail view should show the review summary"
+    # the verdicts render as callouts, not markdown
+    assert any("缺少量化数据。" in w.value for w in at.warning), [w.value for w in at.warning]
+    assert any("项目经历描述具体。" in s.value for s in at.success), [s.value for s in at.success]

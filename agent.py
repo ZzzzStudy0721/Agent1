@@ -20,6 +20,7 @@ import operator
 import os
 import re
 import sys
+import time
 from typing import Annotated, Literal, TypedDict
 
 from dotenv import load_dotenv
@@ -31,6 +32,7 @@ if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 import app
+from history import DEFAULT_JOB, SCORE_DIMENSIONS, record_history
 from langchain_chroma import Chroma
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
@@ -90,8 +92,8 @@ class Decision(BaseModel):
 class InterviewScore(BaseModel):
     """wrap 节点的结构化评分：五个维度各 1-10 分，外加文字点评。
 
-    Kept separate from the free-text summary so the UI can chart the scores
-    (radar / trend) instead of parsing them back out of prose.
+    与自由文本总结分开，是为了让 UI 直接拿分数画图（雷达图 / 趋势图），
+    而不用回头从文字里解析。
     """
 
     technical_depth: int = Field(ge=1, le=10, description='技术深度：对技术细节和原理的掌握')
@@ -102,15 +104,6 @@ class InterviewScore(BaseModel):
     summary: str = Field(description='整体表现总结，2-3 句')
     strength: str = Field(description='最突出的 1 个优点')
     improvement: str = Field(description='最需改进的 1 个问题')
-
-
-SCORE_DIMENSIONS = [
-    ('technical_depth', '技术深度'),
-    ('communication', '表达逻辑'),
-    ('project_experience', '项目经验'),
-    ('job_fit', '岗位匹配'),
-    ('star_completeness', '回答完整度'),
-]
 
 
 class InterviewState(TypedDict):
@@ -528,16 +521,35 @@ def wrap_node(state: InterviewState) -> dict:
         logger.warning('evidence verification failed (%s), skipping', e)
     if verification and '无冲突' not in verification:
         summary += f'\n\n{verification}'
-    # Tool calling：让 LLM 决定通过工具导出报告
+    # Tool calling：让 LLM 决定通过工具导出报告。
+    # 文件名带时间戳，每场各自留档——否则历史记录里的「查看报告」
+    # 会全部指向被下一场覆盖掉的同一个 interview_report.md。
+    stamp = time.strftime('%Y%m%d_%H%M')
+    report_name = f'interview_report_{stamp}.md'
     llm_with_tools = llm.bind_tools([export_report])
     tool_msg = llm_with_tools.invoke(
-        f'请调用 export_report 工具，把下面的复盘报告保存为 interview_report.md：\n\n{summary}',
+        f'请调用 export_report 工具，把下面的复盘报告保存为 {report_name}：\n\n{summary}',
         config={'callbacks': models.get_callbacks()},
     )
     export_note = ''
+    report_file = ''
     for call in tool_msg.tool_calls:
-        result = export_report.invoke(call['args'])
+        # 文件名由程序改写，不用 LLM 填的那个：它不一定照 prompt 说的来，
+        # 而历史记录必须能定位到本场自己的报告文件
+        result = export_report.invoke(dict(call['args'], filename=report_name))
         export_note = f'\n\n📄 {result}'
+        report_file = report_name
+    # 只在有分数时记历史：评分失败的那场没有可比数据，
+    # 记进去只会在历史表里多出一行空分数
+    if score_data:
+        record_history({
+            'time': time.strftime('%Y-%m-%d %H:%M'),
+            'job': DEFAULT_JOB,
+            'rounds': state['round_count'],
+            'topics': state['topics'],
+            'report': report_file,
+            **score_data,
+        })
     text = '\n' + summary + export_note + '\n\n面试结束，感谢作答！'
     return {
         'messages': [AIMessage(content=text)],
