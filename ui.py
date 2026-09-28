@@ -1,6 +1,6 @@
-"""Streamlit UI (WBS 5.1): Q&A chat tab + mock interview tab.
+"""Streamlit UI（WBS 5.1）：知识库问答 Tab + 模拟面试 Tab。
 
-Run in two terminals:
+分两个终端启动：
   1. uvicorn api:fastapi_app --host 127.0.0.1 --port 8000
   2. streamlit run ui.py
 """
@@ -14,9 +14,9 @@ from langgraph.types import Command
 import requests
 import streamlit as st
 
-# NOTE: `agent` is imported lazily inside the interview functions below.
-# Importing it here would run torch / sentence-transformers at page-load time,
-# blocking the whole script for 1-2 minutes — the page looks broken until then.
+# 注意：`agent` 在下面的面试相关函数内部延迟导入。
+# 若在这里导入，页面加载时就会跑 torch / sentence-transformers，
+# 把整个脚本阻塞 1-2 分钟——在那之前页面看起来像是坏掉了。
 
 API = "http://127.0.0.1:8000"
 
@@ -25,7 +25,7 @@ st.title("🎯 面试官模拟 RAG Agent")
 
 
 def _iter_sse(resp):
-    """Yield text chunks from an SSE response body."""
+    """从 SSE 响应体中逐块产出文本片段。"""
     for line in resp.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
             continue
@@ -39,7 +39,7 @@ def _iter_sse(resp):
 
 
 def stream_qa(question):
-    """POST /chat and render the SSE stream; returns the assembled answer."""
+    """向 /chat 发 POST 请求并渲染 SSE 流；返回拼接好的完整回答。"""
     try:
         with requests.post(
             f"{API}/chat", json={"question": question}, timeout=180, stream=True
@@ -52,7 +52,7 @@ def stream_qa(question):
 
 page = st.sidebar.radio("模式切换", ["💬 知识库问答", "🎤 模拟面试"], key="page")
 
-# ---------------- Q&A page (through FastAPI) ----------------
+# ---------------- 知识库问答页（经由 FastAPI） ----------------
 if page == "💬 知识库问答":
     st.caption("回答带原文引用；检索不到相关内容会明确拒答，绝不编造。")
     with st.sidebar:
@@ -80,7 +80,7 @@ if page == "💬 知识库问答":
     question = st.chat_input("问点什么，例如：车辆计数误差控制在多少？（输入「开始面试」切换面试模式）", key="qa_input")
     if question:
         if "开始面试" in question:
-            # unified entry: switch to interview mode, interviewer asks, user answers
+            # 统一入口：切到面试模式，面试官提问，用户作答
             st.session_state.page = "🎤 模拟面试"
             st.session_state.start_interview = True
             st.rerun()
@@ -92,7 +92,7 @@ if page == "💬 知识库问答":
                 answer = stream_qa(question)
         st.session_state.qa_messages.append({"role": "assistant", "content": answer})
 
-# ---------------- Mock interview page (local LangGraph agent) ----------------
+# ---------------- 模拟面试页（本地 LangGraph agent） ----------------
 elif page == "🎤 模拟面试":
     st.caption(
         "AI 面试官：基于 JD+简历抽取话题锚点，自由对话 + 即兴追问，"
@@ -101,9 +101,9 @@ elif page == "🎤 模拟面试":
     )
 
     def start_interview():
-        # Lazy import: agent pulls in torch + sentence-transformers (~1.6 GB RSS,
-        # 1-2 min on first load). Doing it inside the spinner keeps the page
-        # itself instant and tells the user why the button is slow.
+        # 延迟导入：agent 会拉起 torch + sentence-transformers（常驻内存约 1.6 GB，
+        # 首次加载要 1-2 分钟）。放在 spinner 内部执行，页面本身就能秒开，
+        # 同时也告诉用户这个按钮为什么慢。
         import agent
 
         graph = agent.build_interview_graph(MemorySaver())
@@ -129,10 +129,10 @@ elif page == "🎤 模拟面试":
         it["log"].append(("assistant", agent._last_ai_text(result)))
 
     def _sync_uploads() -> bool:
-        """Persist the edited previews to data/ and reindex only if they changed.
+        """把编辑过的预览内容写入 data/，仅在内容有变化时才重建索引。
 
-        Compares against what is already on disk, so hitting "start" twice does
-        not rebuild the index again.
+        会与磁盘上已有的内容做比对，所以连点两次「开始」
+        也不会重复重建索引。
         """
         import agent
 
@@ -160,7 +160,7 @@ elif page == "🎤 模拟面试":
 
     it = st.session_state.get("interview")
 
-    # ---------- optional: upload the resume / JD this interview should use ----------
+    # ---------- 可选：上传本次面试要用的简历 / 岗位 JD ----------
     with st.expander("📄 上传简历 / 岗位 JD（可选）", expanded=not it):
         st.caption(
             "支持 PDF、Word(.docx)、md、txt。提取出的文字先显示在下面，确认无误再点开始按钮；"
@@ -209,7 +209,7 @@ elif page == "🎤 模拟面试":
         _sync_uploads()
         start_interview()
 
-    it = st.session_state.get("interview")  # start_interview() may have just set it
+    it = st.session_state.get("interview")  # start_interview() 可能刚把它设置好
     if it:
         for role, content in it["log"]:
             with st.chat_message(role):

@@ -1,6 +1,6 @@
-"""FastAPI service layer (WBS 5.1): /chat Q&A endpoint + /upload knowledge endpoint.
+"""FastAPI 服务层（WBS 5.1）：/chat 问答接口 + /upload 知识上传接口。
 
-Run: uvicorn api:fastapi_app --host 127.0.0.1 --port 8000
+运行：uvicorn api:fastapi_app --host 127.0.0.1 --port 8000
 """
 import asyncio
 import json
@@ -30,11 +30,11 @@ fastapi_app = FastAPI(title="Interview Mock RAG Agent API", version="0.1.0")
 
 logger = logging.getLogger(__name__)
 
-_pipeline = None  # lazy-loaded (vectorstore, bm25, reranker, llm)
+_pipeline = None  # 延迟加载 (vectorstore, bm25, reranker, llm)
 
 
 def get_pipeline():
-    """Build the Q&A pipeline once; rebuilt after /upload invalidates it."""
+    """问答流程只构建一次；被 /upload 置为失效后再重建。"""
     global _pipeline
     if _pipeline is not None:
         return _pipeline
@@ -62,17 +62,17 @@ class ChatRequest(BaseModel):
 
 
 def _sse(payload: dict) -> str:
-    """Format one server-sent event."""
+    """格式化一条 server-sent event。"""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @fastapi_app.post("/chat")
 async def chat(req: ChatRequest) -> StreamingResponse:
-    """Stream the answer over SSE.
+    """通过 SSE 流式返回回答。
 
-    Pipeline init and local-model retrieval are CPU-bound, so they run in a
-    thread (asyncio.to_thread) and never block the event loop; the sync LLM
-    stream generator is iterated by Starlette's threadpool the same way.
+    流程初始化和本地模型检索都是 CPU 密集型操作，因此放到线程里执行
+    （asyncio.to_thread），不会阻塞事件循环；同步的 LLM 流式生成器
+    同样由 Starlette 的线程池来迭代。
     """
     try:
         store, bm25, reranker, llm = await asyncio.to_thread(get_pipeline)
@@ -104,7 +104,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
 
 @fastapi_app.post("/upload")
 async def upload(file: UploadFile = File(...)) -> dict:
-    """Save an md/txt/pdf file into the knowledge base and rebuild the index."""
+    """把 md/txt/pdf 文件保存进知识库，并重建索引。"""
     if not file.filename.endswith((".md", ".txt", ".pdf")):
         return {"error": "only .md / .txt / .pdf files are supported"}
     os.makedirs(app.DATA_DIR, exist_ok=True)
@@ -112,7 +112,7 @@ async def upload(file: UploadFile = File(...)) -> dict:
     content = await file.read()
     with open(path, "wb") as f:
         f.write(content)
-    # invalidate pipeline and rebuild the vector store so the new doc is searchable
+    # 让流程失效并重建向量库，这样新文档才能被检索到
     global _pipeline
     _pipeline = None
     embeddings = HuggingFaceEmbeddings(model_name=app.EMBED_MODEL)

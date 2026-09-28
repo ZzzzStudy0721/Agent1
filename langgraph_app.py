@@ -1,15 +1,15 @@
-"""LangGraph Harness entry point (`langgraph dev`).
+"""LangGraph Harness 入口（`langgraph dev`）。
 
-langgraph.json points the Harness server at the `graph` attribute below. The
-server checkpoints interview state per thread, so the debug UI drives the whole
-interview across runs: greeting -> candidate answers -> interviewer turns ->
-wrap with debrief + evidence verification + report export.
+langgraph.json 会把 Harness 服务端指向下面的 `graph` 属性。服务端按 thread
+对面试状态做 checkpoint，因此调试 UI 可以跨多次运行驱动整场面试：
+问候 -> 候选人回答 -> 面试官提问 ->
+收尾（复盘 + 证据核实 + 报告导出）。
 
-Run from the project root:
+在项目根目录执行：
 
     langgraph dev
 
-and open the debug UI (a browser tab opens automatically on startup).
+然后打开调试 UI（启动时会自动弹出一个浏览器标签页）。
 """
 
 import os

@@ -1,7 +1,7 @@
-"""Interview mock RAG agent — MVP (M1): load -> chunk -> embed -> retrieve -> answer with citations.
+"""面试模拟 RAG agent —— MVP（M1）：load -> chunk -> embed -> retrieve -> 带引用回答。
 
-Standalone functions (load_and_chunk / retrieve / generate) so that M3 can
-mount them as LangGraph nodes without rewriting.
+各函数（load_and_chunk / retrieve / generate）都保持独立，这样 M3 可以
+直接把它们挂成 LangGraph 节点，无需重写。
 """
 
 import io
@@ -14,10 +14,10 @@ from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Must run before HF imports so HF_ENDPOINT (mirror) takes effect
+# 必须在导入 HF 相关库之前执行，HF_ENDPOINT（镜像源）才会生效
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
-# Fix mojibake on Windows GBK terminals
+# 修复 Windows GBK 终端下的乱码
 if sys.platform == 'win32':
     sys.stdout.reconfigure(  # type: ignore[attr-defined]
         encoding='utf-8', errors='replace'
@@ -32,15 +32,15 @@ import retrieval
 
 EMBED_MODEL = 'BAAI/bge-small-zh-v1.5'
 CHUNK_SIZE = 512
-CHUNK_OVERLAP = 51  # ~10% of chunk size
+CHUNK_OVERLAP = 51  # 约为 chunk size 的 10%
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 DB_DIR = os.path.join(BASE_DIR, 'chroma_db')
 TOP_K = 4
 COLLECTION = 'kb_full'
-# Guardrail: refuse when the best vector similarity is below this.
-# Probed 2026-09-02 (8 samples): relevant 0.283~0.656, irrelevant 0.011~0.127.
-# Rerank score was NOT used: English-pretrained bge-reranker-base fails on
-# colloquial Chinese questions (relevant as low as 0.019 vs irrelevant 0.028).
+# 护栏：最高向量相似度低于该值时就拒答。
+# 2026-09-02 实测（8 个样本）：相关的 0.283~0.656，不相关的 0.011~0.127。
+# 没有采用 rerank 分数：英文预训练的 bge-reranker-base 在中文口语化
+# 提问上会失效（相关的低至 0.019，不相关的却有 0.028）。
 VECTOR_THRESHOLD = 0.2
 REFUSAL = '知识库中没有相关信息，无法回答。'
 
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_and_chunk(data_dir: str = DATA_DIR) -> list:
-    """Load all md/txt/pdf files under data/ and split into overlapping chunks."""
+    """加载 data/ 下所有 md/txt/pdf 文件，并切分成带重叠的 chunk。"""
     splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks = []
     for name in sorted(os.listdir(data_dir)):
@@ -72,13 +72,13 @@ def load_and_chunk(data_dir: str = DATA_DIR) -> list:
 
 
 def extract_text(source, filename: str) -> str:
-    """Extract plain text from an uploaded file (.md / .txt / .pdf / .docx).
+    """从上传的文件（.md / .txt / .pdf / .docx）中提取纯文本。
 
-    `source` is a filesystem path or raw bytes. Word tables are flattened into
-    pipe-separated rows: resumes are usually laid out as tables, and
-    `document.paragraphs` alone would silently drop most of the content.
-    Raises ValueError when nothing readable comes out (e.g. a scanned PDF), so
-    the caller can tell the user instead of indexing an empty document.
+    `source` 是文件系统路径或原始字节。Word 表格会被摊平成用竖线分隔的
+    行：简历通常是用表格排版的，只取 `document.paragraphs` 会悄悄丢掉
+    大部分内容。
+    提取不出任何可读内容时（例如扫描版 PDF）抛出 ValueError，
+    这样调用方可以提示用户，而不是去索引一个空文档。
     """
     ext = os.path.splitext(filename)[1].lower()
     if ext in ('.md', '.txt'):
@@ -112,10 +112,10 @@ def extract_text(source, filename: str) -> str:
 
 
 def rebuild_index() -> int:
-    """Rebuild the persisted vector store from data/; returns the chunk count.
+    """基于 data/ 重建持久化的向量库；返回 chunk 数量。
 
-    Called after an upload so the new document is searchable by both the Q&A
-    pipeline and the interview evidence check.
+    在上传文件之后调用，这样新文档既能被问答流程检索到，
+    也能被面试证据检查检索到。
     """
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
     chunks = load_and_chunk()
@@ -133,19 +133,19 @@ def rebuild_index() -> int:
 
 
 def build_vectorstore(chunks: list, embeddings, collection_name: str = 'langchain') -> Chroma:
-    """Embed chunks with local bge-small-zh and persist to ChromaDB."""
+    """用本地 bge-small-zh 对 chunk 做 embedding，并持久化到 ChromaDB。"""
     return Chroma.from_documents(
         chunks, embeddings, persist_directory=DB_DIR, collection_name=collection_name
     )
 
 
 def retrieve(query: str, vectorstore: Chroma, top_k: int = TOP_K) -> list:
-    """Pure vector retrieval — this is also the ablation baseline for M2."""
+    """纯向量检索 —— 这也是 M2 的消融基线。"""
     return vectorstore.similarity_search(query, k=top_k)
 
 
 def _build_messages(query: str, context_docs: list) -> list:
-    """Build the prompt messages for answer generation (shared by streaming/non)."""
+    """构建生成回答所用的 prompt messages（流式与非流式共用）。"""
     numbered = '\n\n'.join(f'[{i}] {d.page_content}' for i, d in enumerate(context_docs, 1))
     system = (
         '你是面试辅导助手。只根据参考资料回答问题,引用处标注编号如[1]。'
@@ -160,9 +160,9 @@ def _build_messages(query: str, context_docs: list) -> list:
 
 
 def generate(query: str, context_docs: list, llm) -> str:
-    """Generate an answer with inline citations (non-streaming)."""
-    # max_tokens caps long-winded answers: LLM generation is the biggest latency
-    # slice (6-7.5s), and short answers are also better for interview demos
+    """生成带行内引用的回答（非流式）。"""
+    # max_tokens 用来限制啰嗦的回答：LLM 生成是耗时最大的一段
+    # （6-7.5s），而且简短的答案在做面试演示时效果也更好
     start = time.perf_counter()
     answer = llm.invoke(
         _build_messages(query, context_docs),
@@ -174,7 +174,7 @@ def generate(query: str, context_docs: list, llm) -> str:
 
 
 def stream_answer(query: str, context_docs: list, llm):
-    """Yield answer chunks as they are generated (SSE-friendly)."""
+    """一边生成一边产出回答片段（方便 SSE 推送）。"""
     for chunk in llm.stream(
         _build_messages(query, context_docs),
         max_tokens=350,
@@ -185,10 +185,10 @@ def stream_answer(query: str, context_docs: list, llm):
 
 
 def retrieve_or_refuse(query, vectorstore, bm25, reranker, top_k=TOP_K):
-    """Run the refusal gate + hybrid retrieval; returns (refused: bool, docs: list).
+    """执行拒答判断 + 混合检索；返回 (refused: bool, docs: list)。
 
-    Refusal gate uses the Chinese embedding's similarity score, which stays
-    robust on colloquial questions (unlike the English-pretrained reranker).
+    拒答判断用的是中文 embedding 的相似度分数，在口语化提问上依然稳定
+    （不像英文预训练的 reranker）。
     """
     start = time.perf_counter()
     top_vec = vectorstore.similarity_search_with_relevance_scores(query, k=1)
@@ -210,7 +210,7 @@ def retrieve_or_refuse(query, vectorstore, bm25, reranker, top_k=TOP_K):
 
 
 def answer_question(query, vectorstore, bm25, reranker, llm, top_k=TOP_K):
-    """Hybrid retrieval + rerank with refusal guardrail (non-streaming, M2 pipeline)."""
+    """带拒答护栏的混合检索 + 重排（非流式，M2 流程）。"""
     refused, docs = retrieve_or_refuse(query, vectorstore, bm25, reranker, top_k)
     if refused:
         return REFUSAL
@@ -249,7 +249,7 @@ def main():
         if not query:
             continue
         if '开始面试' in query:
-            import agent  # lazy import to avoid circular dependency
+            import agent  # 延迟导入，避免循环依赖
 
             agent.run_interview()
             continue

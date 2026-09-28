@@ -1,9 +1,9 @@
-"""Conversation-quality evaluation (WBS 6.x): run three scripted interviews
-against fixed topic anchors, judge every interviewer question with the
-three-dimension rubric, and write a report plus a decision-routing annotation
-template for human labeling.
+"""对话质量评估（WBS 6.x）：针对固定的话题锚点跑三场脚本化面试，
+用三维度 rubric 评判面试官提出的每一个问题，
+并输出一份报告，外加一份决策路由标注模板
+供人工标注使用。
 
-Usage: python evaluation/eval_judge.py   (live; ~150 LLM calls across 3 scenarios)
+用法：python evaluation/eval_judge.py   （实跑；3 个场景合计约 150 次 LLM 调用）
 """
 import itertools
 import os
@@ -27,7 +27,7 @@ from judge import judge_question, summarize  # noqa: E402
 
 EVAL_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Three scripted candidate personas, one per follow-up trigger condition.
+# 三个脚本化的候选人角色，每个对应一种追问触发条件。
 GOOD_ANSWERS = [
     "我是物联网工程专业的应届生，毕设做的是基于 YOLOv8 和 DeepSORT 的交通视频车辆检测与计数系统。",
     "我对比了 Faster R-CNN、YOLOv5s/n 和 YOLOv8n，最终选 YOLOv8n，帧率 35FPS 且精度最高。",
@@ -64,9 +64,9 @@ SCENARIOS = [
     ("evasive", EVASIVE_ANSWERS),
 ]
 
-# Negative control samples: deliberately bad questions, one per rubric failure
-# mode. The judge must push these down to 1-3; if it scores them high, the
-# rubric has no discriminative power (lenient-judge failure).
+# 负面对照样本：故意写坏的问题，每种 rubric 失败模式各一个。
+# judge 必须把它们压到 1-3 分；如果给它们打了高分，说明
+# rubric 没有区分度（宽松 judge 失效）。
 BAD_QUESTIONS = [
     ("跑题", "今天天气怎么样？适合出门吗？"),
     ("空泛", "说说你的亮点吧。"),
@@ -80,7 +80,7 @@ BAD_QUESTIONS = [
 
 
 def calibrate_judge() -> list:
-    """Score the negative control samples; returns (label, question, verdict)."""
+    """给负面对照样本打分；返回 (label, question, verdict)。"""
     print("\n=== judge calibration (negative controls) ===")
     results = []
     for label, question in BAD_QUESTIONS:
@@ -95,7 +95,7 @@ def calibrate_judge() -> list:
 
 
 def write_calibration(results: list) -> None:
-    """Append the calibration section to the report."""
+    """把校准章节追加到报告中。"""
     lines = [
         "",
         "## Judge 校准（负面对照样本）",
@@ -125,8 +125,8 @@ def write_calibration(results: list) -> None:
 
 
 def run_scripted_interview(answers: list) -> list:
-    """Drive one full interview with scripted answers; returns per-round records
-    (question text, decision, topic, and the history the interviewer saw)."""
+    """用脚本化回答驱动一整场面试；返回每一轮的记录
+    （问题文本、decision、话题，以及面试官当时看到的历史）。"""
     graph = agent.build_turn_graph()
     state = agent.init_state(agent.DEFAULT_TOPICS)
     pool = itertools.cycle(answers)
@@ -149,7 +149,7 @@ def run_scripted_interview(answers: list) -> list:
                     if state["current_topic"]
                     else ""
                 ),
-                # history as the interviewer saw it when generating this question
+                # 生成这个问题时，面试官所看到的历史
                 "history": agent._history_text(state["messages"][:-1], last_n=6),
             }
         )
@@ -157,7 +157,7 @@ def run_scripted_interview(answers: list) -> list:
 
 
 def evaluate_scenario(name: str, answers: list) -> list:
-    """Run one scenario and judge every question; returns verdict records."""
+    """跑一个场景并评判每一个问题；返回评判记录。"""
     print(f"\n=== scenario: {name} ===")
     rounds = run_scripted_interview(answers)
     print(f"[i] {len(rounds)} interviewer questions collected")
@@ -176,7 +176,7 @@ def evaluate_scenario(name: str, answers: list) -> list:
 
 
 def write_report(all_results: dict) -> None:
-    """Write the markdown report + a decision-routing annotation template."""
+    """写出 markdown 报告 + 一份决策路由标注模板。"""
     lines = [
         "# 对话质量评估报告（LLM-as-judge）",
         "",
@@ -210,7 +210,7 @@ def write_report(all_results: dict) -> None:
         f.write("\n".join(lines))
     print(f"\n[i] report written to {report_path}")
 
-    # decision-routing annotation template for human labeling
+    # 供人工标注使用的决策路由标注模板
     ann = [
         "# 决策路由人工标注表",
         "",
