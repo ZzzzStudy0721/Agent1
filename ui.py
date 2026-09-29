@@ -14,8 +14,9 @@ from langgraph.types import Command
 import requests
 import streamlit as st
 
-# 与 agent 不同，history 只依赖标准库，可以在顶部导入：
-# 历史记录区随页面一起渲染，不会拖慢首屏。
+# 与 agent 不同，history 只依赖标准库，charts 也只在函数内部才导入 plotly：
+# 两者都可以在顶部导入，不会拖慢首屏。
+import charts  # noqa: E402
 from history import SCORE_DIMENSIONS, load_history  # noqa: E402
 
 # 注意：`agent` 在下面的面试相关函数内部延迟导入。
@@ -241,6 +242,7 @@ elif page == "🎤 模拟面试":
                 ),
             )
             entry = entries[pick]
+            st.plotly_chart(charts.ability_radar(entries, pick))
             st.markdown(
                 "\n".join(
                     f"- {label}：{entry.get(key, '?')}/10"

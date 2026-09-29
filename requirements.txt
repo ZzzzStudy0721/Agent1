@@ -13,6 +13,7 @@ jieba
 fastapi
 uvicorn
 streamlit
+plotly
 python-dotenv
 pydantic
 pydantic-settings
